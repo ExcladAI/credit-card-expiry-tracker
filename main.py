@@ -4,18 +4,36 @@ from datetime import datetime
 import os
 import re
 import json
+import html
 from collections import Counter
 from pandas.tseries.offsets import DateOffset
-from filelock import FileLock
+from PIL import Image, UnidentifiedImageError
+
+from data_store import (
+    DEFAULT_IMAGE,
+    IMAGE_DIR,
+    MONTH_MAP,
+    MONTH_NAMES,
+    TAGS_FILE,
+    ensure_storage,
+    load_data,
+    new_card_id,
+    update_data,
+)
+
+st.set_page_config(
+    page_title="Card Tracker",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        'About': "A simple, local-first credit card tracker."
+    }
+)
 
 # --- Configuration ---
 # Define constant file paths and directory names.
 # This makes it easy to change them in one place.
-DATA_FILE = "my_cards.csv"  # CSV file to store all card data
-TAGS_FILE = "my_tags.json"  # JSON file for the master list of user-defined tags
-IMAGE_DIR = "card_images"   # Directory to store card images
-DEFAULT_IMAGE = "default.png" # A fallback image if a card's image is missing
-LOCK_FILE = f"{DATA_FILE}.lock" # <--- ADDED LOCK FILE
+ensure_storage()
 
 # --- App Constants ---
 # Constants for date formatting and data schema
@@ -26,66 +44,6 @@ STRFTIME_MAP = {
     "MM/DD/YYYY": "%m/%d/%Y",
     "YYYY-MM-DD": "%Y-%m-%d"
 }
-# List of columns that should be treated as dates
-DATE_COLUMNS = [
-    "Date Applied", "Date Approved", "Date Received Card",
-    "Date Activated Card", "First Charge Date", 
-    "Cancellation Date", "Re-apply Date", "Min Spend Deadline"
-]
-
-# Used to convert '05' -> 'May' for the annual fee month
-MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
-               "July", "August", "September", "October", "November", "December"]
-MONTH_MAP = {f"{i+1:02d}": name for i, name in enumerate(MONTH_NAMES)}
-
-# This is the master list of *all* columns in the DataFrame.
-# It defines the "schema" for our CSV file.
-ALL_COLUMNS = [
-    "Bank", "Card Name", "Annual Fee", "Card Expiry (MM/YY)", "Month of Annual Fee",
-    "Date Applied", "Date Approved", "Date Received Card",
-    "Date Activated Card", "First Charge Date", "Image Filename", "Sort Order",
-    "Notes", "Cancellation Date", "Re-apply Date", "Tags",
-    "Bonus Offer", "Min Spend", "Min Spend Deadline", "Bonus Status",
-    "Last 4 Digits", "Current Spend",
-    "FeeWaivedCount", "FeePaidCount", "LastFeeActionYear",
-    "LastFeeAction"  # Tracks if the last action was 'Waived' or 'Paid'
-]
-# This dictionary defines the data type (dtype) for each column.
-# This is *crucial* for preventing errors when loading/saving data,
-# especially when using pd.concat, which can cause dtype conflicts.
-COLUMN_DTYPES = {
-    "Bank": "object", "Card Name": "object", "Annual Fee": "float",
-    "Card Expiry (MM/YY)": "object", "Month of Annual Fee": "object",
-    "Date Applied": "datetime64[ns]", "Date Approved": "datetime64[ns]",
-    "Date Received Card": "datetime64[ns]", "Date Activated Card": "datetime64[ns]",
-    "First Charge Date": "datetime64[ns]", "Image Filename": "object",
-    "Sort Order": "int",
-    "Notes": "object", "Cancellation Date": "datetime64[ns]", "Re-apply Date": "datetime64[ns]",
-    "Tags": "object",
-    "Bonus Offer": "object", 
-    "Min Spend": "float", 
-    "Min Spend Deadline": "datetime64[ns]", 
-    "Bonus Status": "object",
-    "Last 4 Digits": "object",
-    "Current Spend": "float",
-    "FeeWaivedCount": "int",
-    "FeePaidCount": "int",
-    "LastFeeActionYear": "int",
-    "LastFeeAction": "object" # Set as 'object' (string)
-}
-
-# --- Setup: Create data file and directories if they don't exist ---
-# This is a one-time setup that runs when the app starts.
-# It ensures the app doesn't crash on first launch if files are missing.
-if not os.path.exists(DATA_FILE):
-    df = pd.DataFrame(columns=ALL_COLUMNS)
-    # Apply the dtypes to the empty DataFrame before saving
-    df = df.astype(COLUMN_DTYPES)
-    df.to_csv(DATA_FILE, index=False)
-
-if not os.path.exists(IMAGE_DIR):
-    os.makedirs(IMAGE_DIR)
-
 # --- Initialize Session State ---
 # Streamlit's session state is used to store variables across reruns.
 # We use it here to manage which "page" is shown, what card is being
@@ -133,90 +91,6 @@ if 'uploaded_image_preview' not in st.session_state:
 # =============================================================================
 #  Helper Functions
 # =============================================================================
-
-def load_data():
-    """
-    Loads the card data from the CSV file (DATA_FILE).
-    
-    This function also performs:
-    1.  **Data Migration:** Adds any new columns (from ALL_COLUMNS) that
-        are missing from the CSV, ensuring backward compatibility.
-    2.  **Type Coercion:** Enforces the correct data types (from COLUMN_DTYPES)
-        on all columns to prevent errors during runtime.
-    """
-    try:
-        # <--- SAFETY FIX: Added FileLock here
-        with FileLock(LOCK_FILE):
-            df = pd.read_csv(DATA_FILE)
-    except pd.errors.EmptyDataError:
-        # If the file is empty (e.g., user deleted all rows), create a new empty DF
-        df = pd.DataFrame(columns=ALL_COLUMNS)
-        df = df.astype(COLUMN_DTYPES)
-        return df
-
-    # --- Data Migration ---
-    # This block checks for missing columns and adds them with a default value.
-    # This allows the app to be updated with new features (new columns)
-    # without breaking compatibility with an existing user's CSV file.
-    if "Sort Order" not in df.columns:
-        df["Sort Order"] = range(1, len(df) + 1)
-    if "Notes" not in df.columns:
-        df["Notes"] = ""
-    if "Cancellation Date" not in df.columns:
-        df["Cancellation Date"] = pd.NaT
-    if "Re-apply Date" not in df.columns:
-        df["Re-apply Date"] = pd.NaT
-    if "Tags" not in df.columns:
-        df["Tags"] = ""
-    if "Bonus Offer" not in df.columns:
-        df["Bonus Offer"] = ""
-    if "Min Spend" not in df.columns:
-        df["Min Spend"] = 0.0
-    if "Min Spend Deadline" not in df.columns:
-        df["Min Spend Deadline"] = pd.NaT
-    if "Bonus Status" not in df.columns:
-        df["Bonus Status"] = ""
-    if "Last 4 Digits" not in df.columns:
-        df["Last 4 Digits"] = ""
-    if "Current Spend" not in df.columns:
-        df["Current Spend"] = 0.0
-    if "FeeWaivedCount" not in df.columns:
-        df["FeeWaivedCount"] = 0
-    if "FeePaidCount" not in df.columns:
-        df["FeePaidCount"] = 0
-    if "LastFeeActionYear" not in df.columns:
-        df["LastFeeActionYear"] = 0
-    if "LastFeeAction" not in df.columns:
-        df["LastFeeAction"] = ""
-        
-    # --- Type Coercion ---
-    # This block cleans the data loaded from the CSV.
-    # CSVs don't store types well (e.g., dates become strings, numbers
-    # might be read as objects). This enforces our schema.
-    for col in DATE_COLUMNS:
-        df[col] = pd.to_datetime(df[col], errors='coerce') # 'coerce' turns bad dates into NaT (Not a Time)
-
-    df["Sort Order"] = pd.to_numeric(df["Sort Order"], errors='coerce').fillna(99).astype(int)
-    df["Notes"] = df["Notes"].fillna("").astype(str)
-    df["Tags"] = df["Tags"].fillna("").astype(str)
-    df["Bonus Offer"] = df["Bonus Offer"].fillna("").astype(str)
-    df["Min Spend"] = pd.to_numeric(df["Min Spend"], errors='coerce').fillna(0.0).astype(float)
-    df["Bonus Status"] = df["Bonus Status"].fillna("").astype(str)
-    df["Last 4 Digits"] = df["Last 4 Digits"].fillna("").astype(str)
-    # Fix for cases where '1234.0' was saved
-    df["Last 4 Digits"] = df["Last 4 Digits"].str.replace(r'\.0$', '', regex=True)
-    df["Current Spend"] = pd.to_numeric(df["Current Spend"], errors='coerce').fillna(0.0).astype(float)
-    df["FeeWaivedCount"] = pd.to_numeric(df["FeeWaivedCount"], errors='coerce').fillna(0).astype(int)
-    df["FeePaidCount"] = pd.to_numeric(df["FeePaidCount"], errors='coerce').fillna(0).astype(int)
-    df["LastFeeActionYear"] = pd.to_numeric(df["LastFeeActionYear"], errors='coerce').fillna(0).astype(int)
-    df["LastFeeAction"] = df["LastFeeAction"].fillna("").astype(str)
-
-    # This ensures all columns match the master dtype list,
-    # catching any dtypes missed by manual coercion (like 'Annual Fee')
-    # and correctly typing the empty DataFrame on first load.
-    df = df.astype(COLUMN_DTYPES)
-    return df
-
 
 def prettify_bank_name(bank_name):
     """Converts file-safe bank names (e.g., 'AmericanExpress') to display-friendly names."""
@@ -274,6 +148,42 @@ def save_tags(tags_list):
     except Exception as e:
         st.error(f"Failed to save tags: {e}")
         return False
+
+
+def save_uploaded_image(uploaded_file, bank, card_name):
+    """Validate and persist an uploaded card image."""
+    if uploaded_file.size > 5 * 1024 * 1024:
+        raise ValueError("Image must be 5 MB or smaller.")
+
+    try:
+        image = Image.open(uploaded_file)
+        image.verify()
+    except (UnidentifiedImageError, OSError) as exc:
+        raise ValueError("Uploaded file is not a valid image.") from exc
+
+    uploaded_file.seek(0)
+    extension = os.path.splitext(uploaded_file.name)[1].lower()
+    if extension not in {".png", ".jpg", ".jpeg"}:
+        raise ValueError("Image must be PNG or JPG.")
+
+    bank_safe = re.sub(r'[^a-zA-Z0-9]', '', bank)
+    card_safe = re.sub(r'[^a-zA-Z0-9]', '', card_name)
+    image_filename = f"Custom_{bank_safe}_{card_safe}_{int(datetime.now().timestamp())}{extension}"
+    save_path = os.path.join(IMAGE_DIR, image_filename)
+    with open(save_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    uploaded_file.seek(0)
+    return image_filename
+
+
+def mutate_card(card_id, mutator):
+    def apply_mutation(df):
+        matches = df.index[df["Card ID"] == card_id].tolist()
+        if matches:
+            mutator(df, matches[0])
+        return df
+
+    return update_data(apply_mutation)
 
 
 # =============================================================================
@@ -408,8 +318,6 @@ def show_add_card_form(card_mapping):
     # --- Form Submission Logic ---
     # This code runs *only* after the "Add This Card" button is clicked
     if submitted:
-        df = load_data() # Load all existing data
-        
         # 1. Determine Bank, Card Name, and Image Filename
         if st.session_state.add_method == "Choose from list":
             if not st.session_state.card_to_add_selection:
@@ -431,19 +339,9 @@ def show_add_card_form(card_mapping):
             uploaded_file = st.session_state.uploaded_image_preview # Get file from state
             
             if uploaded_file is not None:
-                # Create a file-safe name
-                bank_safe = re.sub(r'[^a-zA-Z0-9]', '', bank)
-                card_safe = re.sub(r'[^a-zA-Z0-9]', '', card_name)
-                extension = os.path.splitext(uploaded_file.name)[1]
-                # Create a unique filename to prevent overwrites
-                image_filename = f"Custom_{bank_safe}_{card_safe}_{int(datetime.now().timestamp())}{extension}"
-                save_path = os.path.join(IMAGE_DIR, image_filename)
-                
-                # Save the uploaded file to the image directory
                 try:
-                    with open(save_path, "wb") as f:
-                        f.write(uploaded_file.getbuffer())
-                except Exception as e:
+                    image_filename = save_uploaded_image(uploaded_file, bank, card_name)
+                except ValueError as e:
                     st.error(f"Error saving image: {e}")
                     return
 
@@ -460,16 +358,10 @@ def show_add_card_form(card_mapping):
         card_expiry_mm_yy = f"{expiry_mm}/{expiry_yy}"
         fee_month = MONTH_MAP.get(expiry_mm) # '05' -> 'May'
 
-        # Find the next available sort order number
-        max_sort = df['Sort Order'].max()
-        if pd.isna(max_sort) or max_sort < 1:
-            new_sort_order = 1
-        else:
-            new_sort_order = int(max_sort + 1)
-
         # 5. Create New Card Record
         # Build a dictionary for the new card
         new_card = {
+            "Card ID": new_card_id(),
             "Bank": bank, "Card Name": card_name, "Annual Fee": annual_fee,
             "Card Expiry (MM/YY)": card_expiry_mm_yy, "Month of Annual Fee": fee_month,
             "Image Filename": image_filename,
@@ -493,26 +385,14 @@ def show_add_card_form(card_mapping):
             "FeePaidCount": 0,
             "LastFeeActionYear": 0,
             "LastFeeAction": ""
-            # FeeWaivedCount, FeePaidCount, etc. will be filled with
-            # their default values (0, 0, 0, "") by the .astype() call below
         }
 
-        # 6. Save to DataFrame
-        new_df = pd.DataFrame([new_card])
-        
-        # This is the *most important* step for saving.
-        # We enforce the master COLUMN_DTYPES schema on the *new row*.
-        # This ensures that when we pd.concat, the data types match
-        # the main 'df', preventing a FutureWarning and data corruption.
-        new_df = new_df.astype(COLUMN_DTYPES)
-        
-        # Add the new card row to the main DataFrame
-        df = pd.concat([df, new_df], ignore_index=True)
-        # Save the updated DataFrame back to the CSV
-        
-        # <--- SAFETY FIX: Added FileLock here
-        with FileLock(LOCK_FILE):
-            df.to_csv(DATA_FILE, index=False)
+        def add_card(df):
+            max_sort = df['Sort Order'].max()
+            new_card["Sort Order"] = 1 if pd.isna(max_sort) or max_sort < 1 else int(max_sort + 1)
+            return pd.concat([df, pd.DataFrame([new_card])], ignore_index=True)
+
+        update_data(add_card)
 
         # 7. Reset State and Rerun
         st.success(f"Successfully added {bank} {card_name}!")
@@ -531,11 +411,13 @@ def show_edit_form():
     all_cards_df = load_data()
     
     # Get the index of the card to edit from session state
-    card_index = st.session_state.card_to_edit
+    card_id = st.session_state.card_to_edit
+    matches = all_cards_df.index[all_cards_df["Card ID"] == card_id].tolist()
     
     # Safety check: if the index is invalid, go back to the dashboard
-    if card_index is None or card_index not in all_cards_df.index:
+    if card_id is None or not matches:
         st.error("Could not find card to edit. Returning to dashboard."); st.session_state.show_edit_form = False; st.rerun(); return
+    card_index = matches[0]
     
     # Get the row (as a Series) for the card we are editing
     card_data = all_cards_df.loc[card_index]
@@ -671,17 +553,9 @@ def show_edit_form():
         uploaded_file = st.session_state.uploaded_image_preview # Check if a new file was added
         
         if uploaded_file is not None:
-            # If a new file *was* uploaded, save it with a new unique name
-            bank_safe = re.sub(r'[^a-zA-Z0-9]', '', bank)
-            card_safe = re.sub(r'[^a-zA-Z0-9]', '', card_name)
-            extension = os.path.splitext(uploaded_file.name)[1]
-            new_image_filename = f"Custom_{bank_safe}_{card_safe}_{int(datetime.now().timestamp())}{extension}"
-            save_path = os.path.join(IMAGE_DIR, new_image_filename)
-            
             try:
-                with open(save_path, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-            except Exception as e:
+                new_image_filename = save_uploaded_image(uploaded_file, bank, card_name)
+            except ValueError as e:
                 st.error(f"Error saving image: {e}")
                 return
             # Note: We don't delete the old image, to be safe.
@@ -689,34 +563,36 @@ def show_edit_form():
         card_expiry_mm_yy = f"{expiry_mm}/{expiry_yy}"
         fee_month = MONTH_MAP.get(expiry_mm)
 
-        # 3. Update Record in DataFrame
-        # We use .loc[] to find the specific row (by its index) and
-        # update each column with the new values from the form.
-        all_cards_df.loc[card_index, "Bank"] = bank
-        all_cards_df.loc[card_index, "Card Name"] = card_name
-        all_cards_df.loc[card_index, "Image Filename"] = new_image_filename
-        all_cards_df.loc[card_index, "Annual Fee"] = annual_fee
-        all_cards_df.loc[card_index, "Card Expiry (MM/YY)"] = card_expiry_mm_yy
-        all_cards_df.loc[card_index, "Month of Annual Fee"] = fee_month
-        all_cards_df.loc[card_index, "Date Applied"] = pd.to_datetime(applied_date)
-        all_cards_df.loc[card_index, "Date Approved"] = pd.to_datetime(approved_date)
-        all_cards_df.loc[card_index, "Date Received Card"] = pd.to_datetime(received_date)
-        all_cards_df.loc[card_index, "Date Activated Card"] = pd.to_datetime(activated_date)
-        all_cards_df.loc[card_index, "First Charge Date"] = pd.to_datetime(first_charge_date)
-        all_cards_df.loc[card_index, "Notes"] = notes
-        all_cards_df.loc[card_index, "Tags"] = ",".join(selected_tags)
-        all_cards_df.loc[card_index, "Bonus Offer"] = bonus_offer
-        all_cards_df.loc[card_index, "Min Spend"] = min_spend
-        all_cards_df.loc[card_index, "Min Spend Deadline"] = pd.to_datetime(min_spend_deadline)
-        all_cards_df.loc[card_index, "Bonus Status"] = bonus_status
-        all_cards_df.loc[card_index, "Last 4 Digits"] = last_4_digits
-        all_cards_df.loc[card_index, "Current Spend"] = current_spend
+        card_id = card_data["Card ID"]
 
-        # 4. Save, Reset State, and Rerun
-        # <--- SAFETY FIX: Added FileLock here
-        with FileLock(LOCK_FILE):
-            all_cards_df.to_csv(DATA_FILE, index=False)
-            
+        def update_card(df):
+            matches = df.index[df["Card ID"] == card_id].tolist()
+            if not matches:
+                return df
+            idx = matches[0]
+            df.loc[idx, "Bank"] = bank
+            df.loc[idx, "Card Name"] = card_name
+            df.loc[idx, "Image Filename"] = new_image_filename
+            df.loc[idx, "Annual Fee"] = annual_fee
+            df.loc[idx, "Card Expiry (MM/YY)"] = card_expiry_mm_yy
+            df.loc[idx, "Month of Annual Fee"] = fee_month
+            df.loc[idx, "Date Applied"] = pd.to_datetime(applied_date)
+            df.loc[idx, "Date Approved"] = pd.to_datetime(approved_date)
+            df.loc[idx, "Date Received Card"] = pd.to_datetime(received_date)
+            df.loc[idx, "Date Activated Card"] = pd.to_datetime(activated_date)
+            df.loc[idx, "First Charge Date"] = pd.to_datetime(first_charge_date)
+            df.loc[idx, "Notes"] = notes
+            df.loc[idx, "Tags"] = ",".join(selected_tags)
+            df.loc[idx, "Bonus Offer"] = bonus_offer
+            df.loc[idx, "Min Spend"] = min_spend
+            df.loc[idx, "Min Spend Deadline"] = pd.to_datetime(min_spend_deadline)
+            df.loc[idx, "Bonus Status"] = bonus_status
+            df.loc[idx, "Last 4 Digits"] = last_4_digits
+            df.loc[idx, "Current Spend"] = current_spend
+            return df
+
+        update_data(update_card)
+
         st.success(f"Successfully updated {bank} {card_name}!"); 
         st.session_state.show_edit_form = False; st.session_state.card_to_edit = None
         st.session_state.uploaded_image_preview = None # Clear preview
@@ -823,11 +699,10 @@ def show_dashboard(all_cards_df, show_cancelled):
                 
                 # Show a button to change status to "Met"
                 if st.button(f"Mark Bonus as 'Met'", key=f"mark_met_{index}", use_container_width=True):
-                    df = load_data()
-                    df.loc[index, "Bonus Status"] = "Met"
-                    # <--- SAFETY FIX: Added FileLock here
-                    with FileLock(LOCK_FILE):
-                        df.to_csv(DATA_FILE, index=False)
+                    def mark_bonus_met(df, idx):
+                        df.loc[idx, "Bonus Status"] = "Met"
+
+                    mutate_card(card["Card ID"], mark_bonus_met)
                     st.rerun() # Rerun to remove this card from the tracker
             
             # --- State 2: Spend is Not Met ---
@@ -857,20 +732,12 @@ def show_dashboard(all_cards_df, show_cancelled):
                         updated = st.form_submit_button("Update", use_container_width=True)
                     
                     if updated:
-                        # On submit, load data, update the one value, save, and rerun
-                        df = load_data()
-                        # Get the current status from the card data we looped over
-                        current_status = card['Bonus Status']
-                        # If status is "Not Started" and we just added spend,
-                        # automatically change it to "In Progress".
-                        if current_status == "Not Started" and new_spend > 0:
-                            df.loc[index, "Bonus Status"] = "In Progress"
-                        # Update the spend (this was the original code)
-                        df.loc[index, "Current Spend"] = new_spend
-                        
-                        # <--- SAFETY FIX: Added FileLock here
-                        with FileLock(LOCK_FILE):
-                            df.to_csv(DATA_FILE, index=False)
+                        def update_spend(df, idx):
+                            if df.loc[idx, "Bonus Status"] == "Not Started" and new_spend > 0:
+                                df.loc[idx, "Bonus Status"] = "In Progress"
+                            df.loc[idx, "Current Spend"] = new_spend
+
+                        mutate_card(card["Card ID"], update_spend)
                         st.toast(f"Updated spend for {card_name_full}!")
                         st.rerun() 
             st.write("") # Add blank line
@@ -915,27 +782,21 @@ def show_dashboard(all_cards_df, show_cancelled):
                 b_col1, b_col2 = st.columns(2)
                 with b_col1:
                     if st.button("I Waived This Fee", key=f"waived_{index}", use_container_width=True):
-                        df = load_data()
-                        # Increment counter and set the action/year flags
-                        df.loc[index, "FeeWaivedCount"] = df.loc[index, "FeeWaivedCount"] + 1
-                        df.loc[index, "LastFeeActionYear"] = current_year
-                        df.loc[index, "LastFeeAction"] = "Waived" 
-                        
-                        # <--- SAFETY FIX: Added FileLock here
-                        with FileLock(LOCK_FILE):
-                            df.to_csv(DATA_FILE, index=False)
+                        def waive_fee(df, idx):
+                            df.loc[idx, "FeeWaivedCount"] = df.loc[idx, "FeeWaivedCount"] + 1
+                            df.loc[idx, "LastFeeActionYear"] = current_year
+                            df.loc[idx, "LastFeeAction"] = "Waived"
+
+                        mutate_card(card_data["Card ID"], waive_fee)
                         st.rerun()
                 with b_col2:
                     if st.button("I Paid This Fee", key=f"paid_{index}", use_container_width=True):
-                        df = load_data()
-                        # Increment counter and set the action/year flags
-                        df.loc[index, "FeePaidCount"] = df.loc[index, "FeePaidCount"] + 1
-                        df.loc[index, "LastFeeActionYear"] = current_year
-                        df.loc[index, "LastFeeAction"] = "Paid"
-                        
-                        # <--- SAFETY FIX: Added FileLock here
-                        with FileLock(LOCK_FILE):
-                            df.to_csv(DATA_FILE, index=False)
+                        def pay_fee(df, idx):
+                            df.loc[idx, "FeePaidCount"] = df.loc[idx, "FeePaidCount"] + 1
+                            df.loc[idx, "LastFeeActionYear"] = current_year
+                            df.loc[idx, "LastFeeAction"] = "Paid"
+
+                        mutate_card(card_data["Card ID"], pay_fee)
                         st.rerun()
             
             st.write("") 
@@ -1069,10 +930,10 @@ def show_dashboard(all_cards_df, show_cancelled):
         with col2: # Info column
             
             # --- Title/Expiry UI ---
-            title_text = f"{card_row['Bank']} {card_row['Card Name']}"
+            title_text = html.escape(f"{card_row['Bank']} {card_row['Card Name']}")
             last_4 = card_row.get("Last 4 Digits", "")
             if last_4:
-                title_text += f" ({last_4})" # Add (1234) if it exists
+                title_text += f" ({html.escape(str(last_4))})" # Add (1234) if it exists
             expiry_text = f"<b>Card Expiry:</b> {card_row['Card Expiry (MM/YY)']}"
             
             # This custom HTML places the Title on the left and Expiry on the right
@@ -1122,7 +983,7 @@ def show_dashboard(all_cards_df, show_cancelled):
             notes = card_row.get("Notes", "")
             if notes and pd.notna(notes):
                 st.markdown("**Notes:**")
-                st.markdown(notes)
+                st.text(str(notes))
 
             # --- Button Bar ---
             st.write("")  # Spacer
@@ -1133,12 +994,12 @@ def show_dashboard(all_cards_df, show_cancelled):
             with b_col1: # Details button
                 if st.button("Details", key=f"details_{index}", use_container_width=True):
                     # "Go" to the details page by setting its flag and the card index
-                    st.session_state.card_to_view = index; st.session_state.show_details_page = True; st.session_state.card_to_edit = None; st.session_state.card_to_delete = None; st.rerun()
+                    st.session_state.card_to_view = card_row["Card ID"]; st.session_state.show_details_page = True; st.session_state.card_to_edit = None; st.session_state.card_to_delete = None; st.rerun()
             
             with b_col2: # Edit button
                 if st.button("Edit", key=f"edit_{index}", use_container_width=True):
                     # "Go" to the edit page
-                    st.session_state.card_to_edit = index; st.session_state.show_edit_form = True; st.session_state.card_to_delete = None
+                    st.session_state.card_to_edit = card_row["Card ID"]; st.session_state.show_edit_form = True; st.session_state.card_to_delete = None
                     st.session_state.edit_form_loaded = False # Reset edit form preview
                     st.rerun()
             
@@ -1146,37 +1007,32 @@ def show_dashboard(all_cards_df, show_cancelled):
                 if is_cancelled:
                     # --- Re-activate Button ---
                     if st.button("Re-activate", key=f"reactivate_{index}", use_container_width=True):
-                        df = load_data()
-                        # Clear the cancellation/re-apply dates
-                        df.loc[index, "Cancellation Date"] = pd.NaT
-                        df.loc[index, "Re-apply Date"] = pd.NaT
-                        # Reset the fee action year so it shows as due again
-                        df.loc[index, "LastFeeActionYear"] = 0
-                        df.loc[index, "LastFeeAction"] = ""
-                        
-                        # <--- SAFETY FIX: Added FileLock here
-                        with FileLock(LOCK_FILE):
-                            df.to_csv(DATA_FILE, index=False)
+                        def reactivate(df, idx):
+                            df.loc[idx, "Cancellation Date"] = pd.NaT
+                            df.loc[idx, "Re-apply Date"] = pd.NaT
+                            df.loc[idx, "LastFeeActionYear"] = 0
+                            df.loc[idx, "LastFeeAction"] = ""
+
+                        mutate_card(card_row["Card ID"], reactivate)
                         st.success(f"Re-activated {card_row['Bank']} {card_row['Card Name']}.")
                         st.rerun()
                 else:
                     # --- Cancel Button (2-step) ---
                     # Step 1: User clicks "Cancel Card"
                     # We set 'card_to_delete' to this card's index
-                    if st.session_state.card_to_delete == index:
+                    if st.session_state.card_to_delete == card_row["Card ID"]:
                         # Step 2: The page reruns, and now this block is active
                         # Show the confirmation buttons
                         if st.button("Confirm Cancel", key=f"confirm_cancel_{index}", type="primary", use_container_width=True):
-                            df = load_data()
                             cancel_date = pd.to_datetime('today')
                             # Set re-apply to 13 months from now (a safe buffer)
                             reapply_date = cancel_date + DateOffset(months=13)
-                            df.loc[index, "Cancellation Date"] = cancel_date
-                            df.loc[index, "Re-apply Date"] = reapply_date
-                            
-                            # <--- SAFETY FIX: Added FileLock here
-                            with FileLock(LOCK_FILE):
-                                df.to_csv(DATA_FILE, index=False)
+
+                            def cancel_card(df, idx):
+                                df.loc[idx, "Cancellation Date"] = cancel_date
+                                df.loc[idx, "Re-apply Date"] = reapply_date
+
+                            mutate_card(card_row["Card ID"], cancel_card)
                             st.session_state.card_to_delete = None # Clear state
                             st.success(f"Cancelled {card_row['Bank']} {card_row['Card Name']}.")
                             st.rerun()
@@ -1185,20 +1041,17 @@ def show_dashboard(all_cards_df, show_cancelled):
                     else:
                         # Step 1: Show the initial "Cancel Card" button
                         if st.button("Cancel Card", key=f"cancel_{index}", use_container_width=True):
-                            st.session_state.card_to_delete = index; st.session_state.card_to_edit = None; st.rerun()
+                            st.session_state.card_to_delete = card_row["Card ID"]; st.session_state.card_to_edit = None; st.rerun()
             
             with b_col4: # Delete button (2-step)
                 # This uses a *different* session state key per card for confirmation
                 if st.session_state.get(f"confirm_permanent_delete_{index}", False):
                     # Step 2: Show confirmation buttons
                     if st.button("CONFIRM DELETE", key=f"confirm_delete_permanent_{index}", type="primary", use_container_width=True):
-                        df = load_data()
-                        # Use .drop() to permanently remove the row
-                        df = df.drop(index).reset_index(drop=True)
-                        
-                        # <--- SAFETY FIX: Added FileLock here
-                        with FileLock(LOCK_FILE):
-                            df.to_csv(DATA_FILE, index=False)
+                        def delete_card(df):
+                            return df[df["Card ID"] != card_row["Card ID"]].reset_index(drop=True)
+
+                        update_data(delete_card)
                         st.session_state[f"confirm_permanent_delete_{index}"] = False 
                         st.success(f"Permanently deleted {card_row['Bank']} {card_row['Card Name']}.")
                         st.rerun()
@@ -1290,16 +1143,19 @@ def show_sort_order_form():
         else:
             # 2. Save the New Order
             st.session_state.duplicate_sort_numbers = [] # Clear errors
-            df_to_save = load_data() # Load the *full* DataFrame
+            new_orders_by_id = {
+                active_cards_df.loc[index, "Card ID"]: st.session_state[f"sort_{index}"]
+                for index in active_cards_df.index
+            }
             
-            # Loop *only* over the active cards and update their Sort Order
-            for index in active_cards_df.index:
-                new_order = st.session_state[f"sort_{index}"]
-                df_to_save.loc[index, "Sort Order"] = new_order
-            
-            # <--- SAFETY FIX: Added FileLock here
-            with FileLock(LOCK_FILE):
-                df_to_save.to_csv(DATA_FILE, index=False)
+            def save_order(df):
+                for card_id, new_order in new_orders_by_id.items():
+                    matches = df.index[df["Card ID"] == card_id].tolist()
+                    if matches:
+                        df.loc[matches[0], "Sort Order"] = new_order
+                return df
+
+            update_data(save_order)
             st.success("Card order saved!")
             st.session_state.show_sort_form = False # Go back to dashboard
             st.rerun()
@@ -1313,15 +1169,17 @@ def show_details_page():
     st.title("Card Details", anchor=False)
     
     all_cards_df = load_data()
-    # Get the index from session state
-    card_index = st.session_state.card_to_view
+    # Get the card id from session state
+    card_id = st.session_state.card_to_view
+    matches = all_cards_df.index[all_cards_df["Card ID"] == card_id].tolist()
     
     # Safety check
-    if card_index is None or card_index not in all_cards_df.index:
+    if card_id is None or not matches:
         st.error("Could not find card to view. Returning to dashboard."); 
         st.session_state.show_details_page = False; 
         st.rerun(); 
         return
+    card_index = matches[0]
         
     # Get the single card's data
     card = all_cards_df.loc[card_index]
@@ -1374,7 +1232,7 @@ def show_details_page():
     if notes and pd.notna(notes):
         st.divider()
         st.subheader("Notes", anchor=False)
-        st.markdown(notes)
+        st.text(str(notes))
 
     # --- Welcome Offer ---
     st.divider()
@@ -1489,7 +1347,6 @@ def show_tag_manager_page():
                 # --- Cleanup: Remove deleted tags from all cards ---
                 # This is an important step. If we delete a tag,
                 # it should also be removed from any card that was using it.
-                df = load_data()
                 def remove_deleted_tags(tags_str):
                     # Convert "tag1,tag2,tag3" into a list
                     tags_list = [t.strip() for t in tags_str.split(',') if t.strip()]
@@ -1498,12 +1355,11 @@ def show_tag_manager_page():
                     # Join back into a string
                     return ",".join(cleaned_list)
                 
-                # Apply this cleaning function to the "Tags" column
-                df["Tags"] = df["Tags"].apply(remove_deleted_tags)
-                
-                # <--- SAFETY FIX: Added FileLock here
-                with FileLock(LOCK_FILE):
-                    df.to_csv(DATA_FILE, index=False)
+                def clean_card_tags(df):
+                    df["Tags"] = df["Tags"].apply(remove_deleted_tags)
+                    return df
+
+                update_data(clean_card_tags)
                 st.rerun() # Rerun to show the updated tag list
         elif submitted_delete:
             st.warning("Please select at least one tag to delete.")
@@ -1514,17 +1370,6 @@ def show_tag_manager_page():
 # =============================================================================
 def main():
     """Main function that runs the app and controls page routing."""
-    
-    # --- Page Configuration ---
-    # This must be the first Streamlit command
-    st.set_page_config(
-        page_title="Card Tracker",
-        layout="wide",
-        initial_sidebar_state="expanded",
-        menu_items={
-            'About': "A simple, local-first credit card tracker."
-        }
-    )
 
     # --- Custom CSS ---
     # This CSS is injected into the page head

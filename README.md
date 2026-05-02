@@ -38,6 +38,7 @@ Both the local and Docker deployments require environment variables. Create a `.
 ```env
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 TELEGRAM_CHAT_ID=your_telegram_chat_id
+TELEGRAM_USER_ID=your_telegram_user_id
 DATA_FILE=my_cards.csv
 ```
 
@@ -75,7 +76,7 @@ streamlit run main.py --server.port=8502
 Terminal 2 (Bot):
 
 ```bash
-python bot.py
+python3 bot.py
 ```
 
 **Option 2: Shell Script (Linux/Mac)**
@@ -104,7 +105,13 @@ On your NAS, create a directory (e.g., `/docker/credit-card-tracker`) and upload
 
 ### 2\. Docker Compose Configuration
 
-Use the following configuration in your Portainer Stack or `docker-compose.yml`.
+Build the image first:
+
+```bash
+docker build -t credit-card-tracker:latest .
+```
+
+Then use the following configuration in your Portainer Stack or `docker-compose.yml`.
 
 **Note:** This configuration overrides the default container command to ensure both processes run reliably without requiring internal shell scripts.
 
@@ -122,9 +129,9 @@ services:
     ports:
       - "5822:8502" # Host Port : Container Port
 
-    # Startup Command: Runs Bot in background (&) and Streamlit in foreground
-    command: >
-      sh -c "python bot.py & streamlit run main.py --server.port=8502 --server.address=0.0.0.0"
+    # supervisor.py starts both the bot and Streamlit, and stops the container
+    # if either process exits.
+    command: python3 supervisor.py
     
     # Resource Limits (Optional but recommended for NAS)
     deploy:

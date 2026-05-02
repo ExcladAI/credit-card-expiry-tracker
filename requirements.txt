@@ -39,3 +39,4 @@ watchdog==6.0.0
 filelock==3.20.0
 python-dotenv==1.2.1
 python-telegram-bot[job-queue]==22.5
+pytest==8.4.2

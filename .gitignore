@@ -5,6 +5,7 @@ my_tags.json
 # Python cache files
 __pycache__/
 *.pyc
+.venv/
 
 # Streamlit config (good practice)
 .streamlit/
