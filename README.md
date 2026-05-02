@@ -1,14 +1,14 @@
 # Credit Card Tracker
 
-A self-hosted, local-first application designed to track credit card usage, annual fee deadlines, and sign-up bonuses. This project consists of a web-based dashboard for detailed management and a Telegram bot for mobile interactions and notifications.
+A self-hosted, local-first application designed to track credit card usage, annual fee deadlines, and sign-up bonuses. The default web UI is now a React dashboard served by FastAPI, with the Telegram bot running beside it for mobile interactions and notifications.
 
 ## Project Structure
 
 The application runs as two concurrent processes sharing a single CSV database (`my_cards.csv`).
 
-### 1\. `main.py` (Web Dashboard)
+### 1\. React + FastAPI Web Dashboard
 
-Built with **Streamlit**, this file serves as the frontend user interface.
+Built with **React** in `frontend/` and **FastAPI** in `api.py`.
 
   * **Purpose:** Full management of the card portfolio.
   * **Capabilities:**
@@ -54,11 +54,18 @@ DATA_FILE=my_cards.csv
 ### Installation
 
 1.  Clone the repository and navigate to the folder.
-2.  Install dependencies:
+2.  Install Python dependencies:
     ```bash
     pip install -r requirements.txt
     ```
-3.  Ensure your `.env` file is configured.
+3.  Install frontend dependencies:
+    ```bash
+    cd frontend
+    npm install
+    npm run build
+    cd ..
+    ```
+4.  Ensure your `.env` file is configured.
 
 ### Execution
 
@@ -67,10 +74,10 @@ Since the application requires both the web UI and the bot to run simultaneously
 **Option 1: Two Terminals**
 Open two separate terminal windows.
 
-Terminal 1 (Web UI):
+Terminal 1 (Web UI/API):
 
 ```bash
-streamlit run main.py --server.port=8502
+uvicorn api:app --host 0.0.0.0 --port=8502
 ```
 
 Terminal 2 (Bot):
@@ -85,6 +92,12 @@ Run the included helper script:
 ```bash
 chmod +x run.sh
 ./run.sh
+```
+
+The previous Streamlit UI remains available as a fallback:
+
+```bash
+streamlit run main.py --server.port=8503
 ```
 
 -----
@@ -129,7 +142,7 @@ services:
     ports:
       - "5822:8502" # Host Port : Container Port
 
-    # supervisor.py starts both the bot and Streamlit, and stops the container
+    # supervisor.py starts both the bot and FastAPI/React, and stops the container
     # if either process exits.
     command: python3 supervisor.py
     

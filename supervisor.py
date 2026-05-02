@@ -6,17 +6,18 @@ import time
 
 
 def main():
-    port = os.getenv("STREAMLIT_PORT", "8502")
+    port = os.getenv("APP_PORT", os.getenv("STREAMLIT_PORT", "8502"))
     processes = [
         subprocess.Popen([sys.executable, "bot.py"]),
         subprocess.Popen([
-            "streamlit",
-            "run",
-            "main.py",
-            "--server.port",
-            port,
-            "--server.address",
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "api:app",
+            "--host",
             "0.0.0.0",
+            "--port",
+            port,
         ]),
     ]
 

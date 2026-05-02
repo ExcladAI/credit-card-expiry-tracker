@@ -6,3 +6,5 @@ __pycache__
 my_cards.csv
 my_tags.json
 backups
+frontend/node_modules
+frontend/dist

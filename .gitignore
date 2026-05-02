@@ -1,11 +1,14 @@
 # Personal data file - DO NOT COMMIT
 my_cards.csv
 my_tags.json
+*.lock
 
 # Python cache files
 __pycache__/
 *.pyc
 .venv/
+frontend/node_modules/
+frontend/dist/
 
 # Streamlit config (good practice)
 .streamlit/
