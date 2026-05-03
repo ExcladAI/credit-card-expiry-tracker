@@ -92,14 +92,30 @@ def cards_response():
     return [card_to_dict(row) for _, row in df.iterrows()]
 
 
+def explicit_fee_month(payload, expiry):
+    requested = str(payload.get("feeMonth") or "").strip()
+    if requested:
+        return requested
+    expiry_month = expiry.split("/", 1)[0] if "/" in expiry else payload.get("expiryMonth", "")
+    return MONTH_MAP.get(str(expiry_month).zfill(2), "")
+
+
 def parse_card_payload(payload):
     expiry = str(payload.get("expiry") or "")
-    expiry_month = expiry.split("/", 1)[0] if "/" in expiry else payload.get("expiryMonth", "")
-    fee_month = MONTH_MAP.get(str(expiry_month).zfill(2), payload.get("feeMonth") or "")
+    fee_month = explicit_fee_month(payload, expiry)
     tags = payload.get("tags") or []
     bonus = payload.get("bonus") or {}
     dates = payload.get("dates") or {}
     fee_history = payload.get("feeHistory") or {}
+    status = payload.get("status")
+    cancellation_date = pd.to_datetime(dates.get("cancelled"), errors="coerce")
+    reapply_date = pd.to_datetime(dates.get("reapply"), errors="coerce")
+    if status == "active":
+        cancellation_date = pd.NaT
+        reapply_date = pd.NaT
+    elif status == "cancelled" and pd.isna(cancellation_date):
+        cancellation_date = pd.Timestamp.today().normalize()
+        reapply_date = cancellation_date + pd.DateOffset(months=13)
     return {
         "Bank": payload.get("bank", ""),
         "Card Name": payload.get("name", ""),
@@ -120,12 +136,55 @@ def parse_card_payload(payload):
         "Date Received Card": pd.to_datetime(dates.get("received"), errors="coerce"),
         "Date Activated Card": pd.to_datetime(dates.get("activated"), errors="coerce"),
         "First Charge Date": pd.to_datetime(dates.get("firstCharge"), errors="coerce"),
-        "Cancellation Date": pd.to_datetime(dates.get("cancelled"), errors="coerce"),
-        "Re-apply Date": pd.to_datetime(dates.get("reapply"), errors="coerce"),
+        "Cancellation Date": cancellation_date,
+        "Re-apply Date": reapply_date,
         "FeeWaivedCount": fee_history.get("waivedCount", 0) or 0,
         "FeePaidCount": fee_history.get("paidCount", 0) or 0,
         "LastFeeActionYear": fee_history.get("lastActionYear", 0) or 0,
         "LastFeeAction": fee_history.get("lastAction", ""),
+}
+
+
+def diagnostics_response():
+    df = load_data()
+    cards = [card_to_dict(row) for _, row in df.sort_values(by="Sort Order").iterrows()]
+    issues = []
+    image_root = Path(IMAGE_DIR)
+
+    for card in cards:
+        label = f"{card['bank']} {card['name']}".strip() or card["id"]
+        if not card["bank"] or not card["name"]:
+            issues.append({"severity": "error", "type": "missing_identity", "cardId": card["id"], "message": f"{label} is missing bank or card name."})
+        if card["imageFilename"] and card["imageFilename"] != DEFAULT_IMAGE and not (image_root / card["imageFilename"]).exists():
+            issues.append({"severity": "warning", "type": "missing_image", "cardId": card["id"], "message": f"{label} references a missing image: {card['imageFilename']}."})
+        if card["status"] == "active" and card["bonus"]["deadline"] and card["bonus"]["status"] in {"Not Started", "In Progress"}:
+            deadline = pd.to_datetime(card["bonus"]["deadline"], errors="coerce")
+            if not pd.isna(deadline) and deadline.date() < datetime.now().date():
+                issues.append({"severity": "warning", "type": "overdue_bonus", "cardId": card["id"], "message": f"{label} has an overdue welcome bonus deadline."})
+        if card["status"] == "active" and card["expiry"]:
+            expiry = pd.to_datetime(f"01/{card['expiry']}", format="%d/%m/%y", errors="coerce")
+            if not pd.isna(expiry) and expiry + pd.offsets.MonthEnd(0) < pd.Timestamp.today().normalize():
+                issues.append({"severity": "warning", "type": "expired_card", "cardId": card["id"], "message": f"{label} appears to be expired."})
+
+    duplicates = df[df["Sort Order"].duplicated(keep=False)].sort_values("Sort Order")
+    for _, row in duplicates.iterrows():
+        issues.append({
+            "severity": "warning",
+            "type": "duplicate_sort_order",
+            "cardId": row["Card ID"],
+            "message": f"{row['Bank']} {row['Card Name']} shares sort order {row['Sort Order']}.",
+        })
+
+    return {
+        "counts": {
+            "cards": len(cards),
+            "active": sum(1 for card in cards if card["status"] == "active"),
+            "cancelled": sum(1 for card in cards if card["status"] == "cancelled"),
+            "issues": len(issues),
+            "errors": sum(1 for issue in issues if issue["severity"] == "error"),
+            "warnings": sum(1 for issue in issues if issue["severity"] == "warning"),
+        },
+        "issues": issues,
     }
 
 
@@ -152,6 +211,11 @@ def health():
 @app.get("/api/cards")
 def list_cards():
     return cards_response()
+
+
+@app.get("/api/diagnostics")
+def diagnostics():
+    return diagnostics_response()
 
 
 @app.post("/api/cards")
@@ -187,6 +251,9 @@ async def update_card(card_id: str, payload: dict):
 @app.delete("/api/cards/{card_id}")
 def delete_card(card_id: str):
     def mutate(df):
+        idx, _ = get_card_by_id(df, card_id)
+        if idx is None:
+            raise HTTPException(status_code=404, detail="Card not found")
         return df[df["Card ID"] != card_id].reset_index(drop=True)
 
     update_data(mutate)
@@ -273,12 +340,23 @@ async def fee_action(card_id: str, payload: dict):
 @app.post("/api/sort-order")
 async def sort_order(payload: dict):
     orders = payload.get("orders") or {}
+    clean_orders = {}
+    for card_id, order in orders.items():
+        try:
+            order_value = int(order)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Sort order values must be integers") from exc
+        if order_value < 1:
+            raise HTTPException(status_code=400, detail="Sort order values must be positive")
+        clean_orders[card_id] = order_value
+    if len(set(clean_orders.values())) != len(clean_orders):
+        raise HTTPException(status_code=400, detail="Sort order values must be unique")
 
     def mutate(df):
-        for card_id, order in orders.items():
+        for card_id, order in clean_orders.items():
             idx, _ = get_card_by_id(df, card_id)
             if idx is not None:
-                df.loc[idx, "Sort Order"] = int(order)
+                df.loc[idx, "Sort Order"] = order
         return df
 
     update_data(mutate)
@@ -316,11 +394,11 @@ async def upload_image(file: UploadFile = File(...)):
     if file.size and file.size > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Image must be 5 MB or smaller")
     extension = Path(file.filename or "").suffix.lower()
-    if extension not in {".png", ".jpg", ".jpeg"}:
-        raise HTTPException(status_code=400, detail="Image must be PNG or JPG")
+    if extension not in {".png", ".jpg", ".jpeg", ".webp"}:
+        raise HTTPException(status_code=400, detail="Image must be PNG, JPG, or WebP")
 
     content = await file.read()
-    temp_path = Path(IMAGE_DIR) / f".upload-check{extension}"
+    temp_path = Path(IMAGE_DIR) / f".upload-check-{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}{extension}"
     temp_path.write_bytes(content)
     try:
         Image.open(temp_path).verify()

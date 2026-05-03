@@ -50,6 +50,9 @@ def test_create_update_and_delete_card(tmp_path, monkeypatch):
     assert deleted.status_code == 200
     assert deleted.json() == []
 
+    missing = client.delete(f"/api/cards/{card_id}")
+    assert missing.status_code == 404
+
 
 def test_tags_endpoint_removes_tag_from_cards(tmp_path, monkeypatch):
     configure_paths(tmp_path, monkeypatch)
@@ -63,3 +66,55 @@ def test_tags_endpoint_removes_tag_from_cards(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert response.json()["tags"] == ["cashback"]
     assert response.json()["cards"][0]["tags"] == []
+
+
+def test_explicit_fee_month_is_preserved(tmp_path, monkeypatch):
+    configure_paths(tmp_path, monkeypatch)
+    client = TestClient(api.app)
+
+    response = client.post(
+        "/api/cards",
+        json={
+            "bank": "UOB",
+            "name": "Lady's Solitaire",
+            "expiry": "05/27",
+            "feeMonth": "February",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()[0]["feeMonth"] == "February"
+
+
+def test_sort_order_rejects_duplicates(tmp_path, monkeypatch):
+    configure_paths(tmp_path, monkeypatch)
+    client = TestClient(api.app)
+
+    first = client.post("/api/cards", json={"bank": "DBS", "name": "One"}).json()[0]
+    second = client.post("/api/cards", json={"bank": "UOB", "name": "Two"}).json()[1]
+
+    response = client.post("/api/sort-order", json={"orders": {first["id"]: 1, second["id"]: 1}})
+
+    assert response.status_code == 400
+    assert "unique" in response.json()["detail"]
+
+
+def test_diagnostics_reports_missing_image(tmp_path, monkeypatch):
+    configure_paths(tmp_path, monkeypatch)
+    client = TestClient(api.app)
+
+    client.post(
+        "/api/cards",
+        json={
+            "bank": "DBS",
+            "name": "Altitude Visa",
+            "imageFilename": "missing.png",
+        },
+    )
+
+    response = client.get("/api/diagnostics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["counts"]["issues"] == 1
+    assert body["issues"][0]["type"] == "missing_image"
