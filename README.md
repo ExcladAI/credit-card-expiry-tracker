@@ -43,9 +43,10 @@ DATA_FILE=my_cards.csv
 TAGS_FILE=my_tags.json
 IMAGE_DIR=card_images
 RUN_BOT=auto
+RUN_BOT_REQUIRED=false
 ```
 
-`RUN_BOT=auto` starts the Telegram bot only when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are present. Set `RUN_BOT=false` for a web-dashboard-only deployment, or `RUN_BOT=true` when you want the container to fail fast if bot credentials are missing.
+`RUN_BOT=auto` starts the Telegram bot only when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are present. Set `RUN_BOT=false` for a web-dashboard-only deployment. By default, `RUN_BOT_REQUIRED=false` keeps the web dashboard running even if the bot exits, which can happen when another deployment is already polling the same Telegram bot token.
 
 -----
 
@@ -131,7 +132,7 @@ docker build -t credit-card-tracker:latest .
 
 Then use the following configuration in your Portainer Stack or `docker-compose.yml`.
 
-**Note:** `supervisor.py` always starts the FastAPI/React web dashboard. The Telegram bot is started only when `RUN_BOT=true` or when `RUN_BOT=auto` and Telegram credentials are present.
+**Note:** `supervisor.py` always starts the FastAPI/React web dashboard. The Telegram bot is started only when `RUN_BOT=true` or when `RUN_BOT=auto` and Telegram credentials are present. The bot is non-critical unless `RUN_BOT_REQUIRED=true`, so a Telegram polling conflict will not make the web UI unreachable.
 
 ```yaml
 services:
@@ -156,6 +157,7 @@ services:
       IMAGE_DIR: card_images
       APP_PORT: 8502
       RUN_BOT: "auto"
+      RUN_BOT_REQUIRED: "false"
     
     # Resource Limits (Optional but recommended for NAS)
     deploy:

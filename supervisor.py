@@ -4,6 +4,11 @@ import subprocess
 import sys
 import time
 
+from dotenv import load_dotenv
+
+
+load_dotenv()
+
 
 def should_start_bot():
     setting = os.getenv("RUN_BOT", "auto").strip().lower()
@@ -14,9 +19,15 @@ def should_start_bot():
     return bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"))
 
 
+def is_bot_required():
+    setting = os.getenv("RUN_BOT_REQUIRED", "false").strip().lower()
+    return setting in {"1", "true", "yes", "on"}
+
+
 def main():
     port = os.getenv("APP_PORT", os.getenv("STREAMLIT_PORT", "8502"))
     processes = []
+    bot_required = is_bot_required()
 
     if should_start_bot():
         processes.append(("bot", subprocess.Popen([sys.executable, "bot.py"])))
@@ -55,6 +66,10 @@ def main():
             for name, proc in processes:
                 code = proc.poll()
                 if code is not None:
+                    if name == "bot" and not bot_required:
+                        print(f"bot process exited with code {code}; web dashboard will keep running.", flush=True)
+                        processes.remove((name, proc))
+                        continue
                     print(f"{name} process exited with code {code}; stopping.", flush=True)
                     stop_all()
                     return code
