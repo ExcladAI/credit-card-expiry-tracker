@@ -40,7 +40,12 @@ TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 TELEGRAM_CHAT_ID=your_telegram_chat_id
 TELEGRAM_USER_ID=your_telegram_user_id
 DATA_FILE=my_cards.csv
+TAGS_FILE=my_tags.json
+IMAGE_DIR=card_images
+RUN_BOT=auto
 ```
+
+`RUN_BOT=auto` starts the Telegram bot only when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are present. Set `RUN_BOT=false` for a web-dashboard-only deployment, or `RUN_BOT=true` when you want the container to fail fast if bot credentials are missing.
 
 -----
 
@@ -126,7 +131,7 @@ docker build -t credit-card-tracker:latest .
 
 Then use the following configuration in your Portainer Stack or `docker-compose.yml`.
 
-**Note:** This configuration overrides the default container command to ensure both processes run reliably without requiring internal shell scripts.
+**Note:** `supervisor.py` always starts the FastAPI/React web dashboard. The Telegram bot is started only when `RUN_BOT=true` or when `RUN_BOT=auto` and Telegram credentials are present.
 
 ```yaml
 services:
@@ -142,9 +147,15 @@ services:
     ports:
       - "5822:8502" # Host Port : Container Port
 
-    # supervisor.py starts both the bot and FastAPI/React, and stops the container
-    # if either process exits.
+    # supervisor.py starts FastAPI/React and optionally starts the Telegram bot.
     command: python3 supervisor.py
+
+    environment:
+      DATA_FILE: my_cards.csv
+      TAGS_FILE: my_tags.json
+      IMAGE_DIR: card_images
+      APP_PORT: 8502
+      RUN_BOT: "auto"
     
     # Resource Limits (Optional but recommended for NAS)
     deploy:
