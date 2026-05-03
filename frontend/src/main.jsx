@@ -12,14 +12,18 @@ import {
   EyeOff,
   GripVertical,
   Home,
+  ListOrdered,
+  MessageCircle,
+  Moon,
   Pencil,
   Plus,
   RefreshCcw,
   Search,
   Settings,
+  SlidersHorizontal,
+  Sun,
   Tag,
   Trash2,
-  Upload,
   WalletCards,
 } from "lucide-react";
 import { api, imageUrl } from "./api";
@@ -43,7 +47,9 @@ const nav = [
   { id: "cards", label: "Cards", icon: WalletCards },
   { id: "bonuses", label: "Bonuses", icon: Check },
   { id: "fees", label: "Fees", icon: CalendarClock },
+  { id: "sort", label: "Sort order", icon: ListOrdered },
   { id: "tags", label: "Tags", icon: Tag },
+  { id: "notifications", label: "Notifications", icon: MessageCircle },
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
@@ -56,6 +62,8 @@ function App() {
   const [query, setQuery] = useState("");
   const [showCancelled, setShowCancelled] = useState(true);
   const [hideLast4, setHideLast4] = useState(false);
+  const [theme, setTheme] = useState(() => localStorage.getItem("card-tracker-theme") || "light");
+  const [density, setDensity] = useState(() => localStorage.getItem("card-tracker-density") || "comfortable");
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState("");
 
@@ -78,6 +86,16 @@ function App() {
     const id = setTimeout(() => setToast(""), 2600);
     return () => clearTimeout(id);
   }, [toast]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("card-tracker-theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    document.documentElement.dataset.density = density;
+    localStorage.setItem("card-tracker-density", density);
+  }, [density]);
 
   const selected = cards.find((card) => card.id === selectedId);
 
@@ -121,6 +139,15 @@ function App() {
         ))}
 
         <div className="sidebar-footer">
+          <div className="footer-card">
+            <div>
+              <strong>Local vault</strong>
+              <span>{counts.active.length} active · {counts.cancelled.length} archived</span>
+            </div>
+            <button className="icon-btn" title="Toggle theme" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+              {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
+            </button>
+          </div>
           <label className="switch-row">
             <input type="checkbox" checked={hideLast4} onChange={(event) => setHideLast4(event.target.checked)} />
             {hideLast4 ? <EyeOff size={15} /> : <Eye size={15} />}
@@ -129,6 +156,14 @@ function App() {
           <label className="switch-row">
             <input type="checkbox" checked={showCancelled} onChange={(event) => setShowCancelled(event.target.checked)} />
             Show cancelled
+          </label>
+          <label className="switch-row">
+            <SlidersHorizontal size={15} />
+            Density
+            <select value={density} onChange={(event) => setDensity(event.target.value)}>
+              <option value="comfortable">Comfortable</option>
+              <option value="compact">Compact</option>
+            </select>
           </label>
         </div>
       </aside>
@@ -145,6 +180,9 @@ function App() {
           <button className="btn primary" onClick={() => setEditing(emptyCard())}>
             <Plus size={15} /> Add card
           </button>
+          <button className="icon-btn top-icon" title="Toggle theme" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+            {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
+          </button>
         </header>
 
         {loading ? (
@@ -157,6 +195,11 @@ function App() {
             query={query}
             showCancelled={showCancelled}
             hideLast4={hideLast4}
+            theme={theme}
+            density={density}
+            setTheme={setTheme}
+            setDensity={setDensity}
+            setHideLast4={setHideLast4}
             selected={selected}
             setPage={setPage}
             setSelectedId={setSelectedId}
@@ -188,6 +231,8 @@ function navCount(id, counts) {
   if (id === "cards") return counts.active.length;
   if (id === "fees") return counts.urgentFees;
   if (id === "bonuses") return counts.bonuses.length;
+  if (id === "sort") return counts.active.length;
+  if (id === "notifications") return counts.urgentFees + counts.bonuses.length;
   if (id === "tags") return "";
   return null;
 }
@@ -208,7 +253,9 @@ function Router(props) {
   if (props.page === "cards") return <CardsPage {...props} />;
   if (props.page === "bonuses") return <BonusesPage {...props} />;
   if (props.page === "fees") return <FeesPage {...props} />;
+  if (props.page === "sort") return <SortPage {...props} />;
   if (props.page === "tags") return <TagsPage {...props} />;
+  if (props.page === "notifications") return <NotificationsPage {...props} />;
   if (props.page === "settings") return <SettingsPage {...props} />;
   return <Overview {...props} />;
 }
@@ -224,6 +271,10 @@ function Overview({ cards, hideLast4, setPage, setSelectedId, setEditing, mutate
   const ready = cancelled.filter((card) => card.dates?.reapply && new Date(card.dates.reapply) <= new Date());
   const totalFees = active.reduce((sum, card) => sum + Number(card.annualFee || 0), 0);
   const urgent = upcomingFees.filter((item) => item.days <= 30).length + activeBonuses.filter((card) => bonusProgress(card).days <= 30).length;
+  const calendar = MONTHS.map((month) => {
+    const due = active.filter((card) => card.feeMonth === month);
+    return { month, count: due.length, total: due.reduce((sum, card) => sum + Number(card.annualFee || 0), 0) };
+  });
 
   return (
     <div className="content">
@@ -260,6 +311,18 @@ function Overview({ cards, hideLast4, setPage, setSelectedId, setEditing, mutate
         </Panel>
       </section>
 
+      <Panel title="12-month fee calendar" sub="Annual fee density by month">
+        <div className="calendar-strip">
+          {calendar.map((item) => (
+            <button key={item.month} className={`month-cell ${item.count ? "has-fees" : ""}`} onClick={() => setPage("fees")}>
+              <span>{item.month.slice(0, 3)}</span>
+              <strong>{item.count}</strong>
+              <small>{item.total ? fmtMoneyShort(item.total) : "No fees"}</small>
+            </button>
+          ))}
+        </div>
+      </Panel>
+
       <Panel title="Welcome bonus tracker" sub={`${activeBonuses.length} active bonus windows`}>
         {activeBonuses.length ? activeBonuses
           .sort((a, b) => (bonusProgress(a).days || 999) - (bonusProgress(b).days || 999))
@@ -284,7 +347,7 @@ function CardsPage({ cards, tags, query, showCancelled, hideLast4, setSelectedId
       <div className="filterbar">
         <Select value={bank} onChange={setBank} options={["", ...banks]} label="Bank" />
         <Select value={tag} onChange={setTag} options={["", ...tags]} label="Tag" />
-        <Select value={sort} onChange={setSort} options={["manual", "due", "fee-desc", "fee-asc"]} label="Sort" />
+        <Select value={sort} onChange={setSort} options={["manual", "due", "fee-desc", "fee-asc", "bank"]} label="Sort" />
       </div>
       <Panel flush>
         <div className="table-head">
@@ -368,11 +431,112 @@ function TagsPage({ cards, tags, refresh, mutate }) {
   );
 }
 
-function SettingsPage({ mutate }) {
+function SortPage({ cards, hideLast4, setSelectedId, mutate }) {
+  const active = cards.filter((card) => card.status === "active").sort((a, b) => a.sortOrder - b.sortOrder);
+  const [orders, setOrders] = useState(() => Object.fromEntries(active.map((card, index) => [card.id, card.sortOrder || index + 1])));
+
+  useEffect(() => {
+    setOrders(Object.fromEntries(active.map((card, index) => [card.id, card.sortOrder || index + 1])));
+  }, [cards.length]);
+
+  const values = Object.values(orders).map(Number).filter(Boolean);
+  const duplicates = values.filter((value, index) => values.indexOf(value) !== index);
+  const hasDuplicates = duplicates.length > 0;
+
+  function renumber() {
+    setOrders(Object.fromEntries(active.map((card, index) => [card.id, index + 1])));
+  }
+
+  function bump(cardId, delta) {
+    const sorted = active
+      .map((card) => ({ id: card.id, order: Number(orders[card.id] || card.sortOrder || 99) }))
+      .sort((a, b) => a.order - b.order);
+    const index = sorted.findIndex((item) => item.id === cardId);
+    const swap = index + delta;
+    if (swap < 0 || swap >= sorted.length) return;
+    [sorted[index], sorted[swap]] = [sorted[swap], sorted[index]];
+    setOrders(Object.fromEntries(sorted.map((item, nextIndex) => [item.id, nextIndex + 1])));
+  }
+
+  return (
+    <div className="content">
+      <PageHeader title="Sort order" sub="Manual order used by the card list and bot responses">
+        {hasDuplicates && <span className="pill rose">Duplicate order values</span>}
+        <button className="btn" onClick={renumber}><ListOrdered size={14} /> Renumber</button>
+        <button className="btn primary" onClick={() => mutate(() => api.sortOrder(orders), "Sort order saved")}>Save order</button>
+      </PageHeader>
+      <Panel title="Active cards" sub="Use arrows or order numbers to control display priority">
+        {active.map((card, index) => (
+          <div className="sort-row" key={card.id}>
+            <GripVertical size={15} />
+            <CardRow card={card} hideLast4={hideLast4} compact onOpen={() => setSelectedId(card.id)}>
+              <button className="btn small" disabled={index === 0} onClick={(event) => { event.stopPropagation(); bump(card.id, -1); }}>Up</button>
+              <button className="btn small" disabled={index === active.length - 1} onClick={(event) => { event.stopPropagation(); bump(card.id, 1); }}>Down</button>
+            </CardRow>
+            <input
+              className={duplicates.includes(Number(orders[card.id])) ? "order-input duplicate" : "order-input"}
+              type="number"
+              min="1"
+              value={orders[card.id] || ""}
+              onChange={(event) => setOrders({ ...orders, [card.id]: Number(event.target.value) })}
+            />
+          </div>
+        ))}
+      </Panel>
+    </div>
+  );
+}
+
+function NotificationsPage({ cards, hideLast4, setSelectedId }) {
+  const active = cards.filter((card) => card.status === "active");
+  const events = [
+    ...active
+      .map((card) => ({ card, type: "Annual fee", days: daysUntilMonth(card.feeMonth), tone: feeTone(card), detail: `${fmtMoney(card.annualFee)} due in ${card.feeMonth || "N/A"}` }))
+      .filter((event) => event.days <= 60),
+    ...active
+      .filter(isBonusActive)
+      .map((card) => ({ card, type: "Welcome bonus", days: bonusProgress(card).days ?? 999, tone: bonusProgress(card).days <= 30 ? "rose" : "amber", detail: `${fmtMoney(bonusProgress(card).remaining)} remaining` })),
+  ].sort((a, b) => a.days - b.days);
+
+  return (
+    <div className="content">
+      <PageHeader title="Notifications" sub="Telegram reminder surface and upcoming triggers" />
+      <section className="grid two">
+        <Panel title="Telegram bot" sub="Uses the same local data as this dashboard">
+          <div className="bot-card">
+            <div className="bot-icon"><Bell size={18} /></div>
+            <div>
+              <strong>Reminder bot configured by environment</strong>
+              <p>Keep `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`; the dashboard never exposes them.</p>
+            </div>
+          </div>
+          <div className="command-list">
+            {["/cards", "/info", "/fees", "/bonus", "/track", "/stats", "/backup", "/export"].map((cmd) => <code key={cmd}>{cmd}</code>)}
+          </div>
+        </Panel>
+        <Panel title="Upcoming notification queue" sub={`${events.length} reminders from real card data`}>
+          {events.length ? events.map((event) => (
+            <CardRow key={`${event.type}-${event.card.id}`} card={event.card} hideLast4={hideLast4} compact onOpen={() => setSelectedId(event.card.id)}>
+              <span className={`pill ${event.tone}`}>{event.days}d</span>
+              <div className="muted-note">{event.type} · {event.detail}</div>
+            </CardRow>
+          )) : <Empty>No notifications due in the next 60 days.</Empty>}
+        </Panel>
+      </section>
+    </div>
+  );
+}
+
+function SettingsPage({ mutate, theme, density, hideLast4, setTheme, setDensity, setHideLast4 }) {
   return (
     <div className="content">
       <PageHeader title="Settings" sub="Export, backups, and bot reference" />
       <section className="grid two">
+        <Panel title="Display">
+          <div className="setting-row"><span>Theme</span><button className="btn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun size={14} /> : <Moon size={14} />} {theme === "dark" ? "Dark" : "Light"}</button></div>
+          <div className="setting-row"><span>Privacy</span><button className="btn" onClick={() => setHideLast4(!hideLast4)}>{hideLast4 ? <EyeOff size={14} /> : <Eye size={14} />} {hideLast4 ? "Last 4 hidden" : "Last 4 visible"}</button></div>
+          <div className="setting-row"><span>Density</span><select value={density} onChange={(event) => setDensity(event.target.value)}><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></div>
+        </Panel>
         <Panel title="Data">
           <div className="setting-row"><span>Download CSV export</span><a className="btn" href="/api/export"><Download size={14} /> Export</a></div>
           <div className="setting-row"><span>Create local backup</span><button className="btn" onClick={() => mutate(api.backup, "Backup created")}><Archive size={14} /> Backup</button></div>
@@ -389,6 +553,7 @@ function SettingsPage({ mutate }) {
 
 function Details({ selected, hideLast4, setSelectedId, setEditing, mutate }) {
   const progress = bonusProgress(selected);
+  const [tab, setTab] = useState("overview");
   return (
     <div className="content">
       <PageHeader title={`${selected.bank} ${selected.name}`} sub={selected.status === "cancelled" ? "Cancelled card" : "Active card"}>
@@ -407,27 +572,36 @@ function Details({ selected, hideLast4, setSelectedId, setEditing, mutate }) {
             <button className="btn danger" onClick={() => window.confirm("Permanently delete this card?") && mutate(() => api.deleteCard(selected.id), "Card deleted").then(() => setSelectedId(null))}>Delete</button>
           </div>
         </Panel>
-        <Panel title="Card details">
-          <dl className="details">
+        <Panel title="Card workspace">
+          <div className="tabs">
+            {["overview", "fee history", "welcome offer", "timeline"].map((item) => (
+              <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item}</button>
+            ))}
+          </div>
+          {tab === "overview" && <dl className="details">
             <dt>Annual fee</dt><dd>{fmtMoney(selected.annualFee)}</dd>
             <dt>Fee month</dt><dd>{selected.feeMonth || "N/A"}</dd>
             <dt>Expiry</dt><dd>{selected.expiry || "N/A"}</dd>
             <dt>Last 4</dt><dd>{hideLast4 ? "••••" : selected.last4 || "N/A"}</dd>
             <dt>Tags</dt><dd>{selected.tags.length ? selected.tags.join(", ") : "N/A"}</dd>
             <dt>Notes</dt><dd>{selected.notes || "N/A"}</dd>
-          </dl>
-        </Panel>
-        <Panel title="Welcome offer">
-          <div className="bonus-name">{selected.bonus?.offer || "No offer recorded"}</div>
-          <div className="progress"><span style={{ width: `${progress.percent}%` }} /></div>
-          <div className="bonus-meta">{fmtMoney(selected.bonus?.currentSpend)} / {fmtMoney(selected.bonus?.minSpend)} · {progress.days ?? "N/A"} days left</div>
-          <button className="btn small" onClick={() => {
-            const amount = Number(prompt("Add spend amount"));
-            if (amount > 0) mutate(() => api.addSpend(selected.id, amount), "Spend updated");
-          }}>Add spend</button>
-        </Panel>
-        <Panel title="Timeline">
-          <dl className="details">
+          </dl>}
+          {tab === "fee history" && <dl className="details">
+            <dt>Waived</dt><dd>{selected.feeHistory?.waivedCount || 0} times</dd>
+            <dt>Paid</dt><dd>{selected.feeHistory?.paidCount || 0} times</dd>
+            <dt>Last action</dt><dd>{selected.feeHistory?.lastAction || "N/A"} {selected.feeHistory?.lastActionYear || ""}</dd>
+            <dt>Prompt</dt><dd>{daysUntilMonth(selected.feeMonth) <= 60 ? "Call for waiver or decide whether to keep." : "No immediate fee action."}</dd>
+          </dl>}
+          {tab === "welcome offer" && <div>
+            <div className="bonus-name">{selected.bonus?.offer || "No offer recorded"}</div>
+            <div className="progress"><span style={{ width: `${progress.percent}%` }} /></div>
+            <div className="bonus-meta">{fmtMoney(selected.bonus?.currentSpend)} / {fmtMoney(selected.bonus?.minSpend)} · {progress.days ?? "N/A"} days left</div>
+            <button className="btn small" onClick={() => {
+              const amount = Number(prompt("Add spend amount"));
+              if (amount > 0) mutate(() => api.addSpend(selected.id, amount), "Spend updated");
+            }}>Add spend</button>
+          </div>}
+          {tab === "timeline" && <dl className="details">
             <dt>Applied</dt><dd>{fmtDate(selected.dates?.applied)}</dd>
             <dt>Approved</dt><dd>{fmtDate(selected.dates?.approved)}</dd>
             <dt>Received</dt><dd>{fmtDate(selected.dates?.received)}</dd>
@@ -435,7 +609,7 @@ function Details({ selected, hideLast4, setSelectedId, setEditing, mutate }) {
             <dt>First charge</dt><dd>{fmtDate(selected.dates?.firstCharge)}</dd>
             <dt>Cancelled</dt><dd>{fmtDate(selected.dates?.cancelled)}</dd>
             <dt>Re-apply</dt><dd>{fmtDate(selected.dates?.reapply)}</dd>
-          </dl>
+          </dl>}
         </Panel>
       </section>
     </div>
@@ -483,20 +657,23 @@ function CardEditor({ card, tags, onClose, onSave }) {
             <Input label="Last 4 digits" value={draft.last4} maxLength={4} onChange={(value) => set("last4", value.replace(/\D/g, ""))} />
             <Input label="Expiry MM/YY" value={draft.expiry} placeholder="05/27" onChange={(value) => set("expiry", value)} />
             <Input label="Annual fee" type="number" value={draft.annualFee} onChange={(value) => set("annualFee", Number(value))} />
-            <label className="field"><span>Card image</span><input type="file" accept="image/png,image/jpeg" onChange={(event) => upload(event.target.files?.[0])} />{uploading && <small>Uploading...</small>}</label>
           </FormSection>
-          <FormSection number="02" title="Tags and notes">
+          <FormSection number="02" title="Card image">
+            <div className="image-preview"><CardArt card={draft} large hideLast4={false} /></div>
+            <label className="field span"><span>Upload image</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => upload(event.target.files?.[0])} />{uploading && <small>Uploading...</small>}</label>
+          </FormSection>
+          <FormSection number="03" title="Tags and notes">
             <label className="field span"><span>Tags</span><select multiple value={draft.tags || []} onChange={(event) => set("tags", [...event.target.selectedOptions].map((option) => option.value))}>{tags.map((tag) => <option key={tag}>{tag}</option>)}</select></label>
             <label className="field span"><span>Notes</span><textarea value={draft.notes || ""} onChange={(event) => set("notes", event.target.value)} /></label>
           </FormSection>
-          <FormSection number="03" title="Welcome offer">
+          <FormSection number="04" title="Welcome offer">
             <Input label="Offer" value={draft.bonus?.offer} onChange={(value) => set("bonus.offer", value)} />
             <Input label="Min spend" type="number" value={draft.bonus?.minSpend} onChange={(value) => set("bonus.minSpend", Number(value))} />
             <Input label="Current spend" type="number" value={draft.bonus?.currentSpend} onChange={(value) => set("bonus.currentSpend", Number(value))} />
             <Input label="Deadline" type="date" value={draft.bonus?.deadline || ""} onChange={(value) => set("bonus.deadline", value)} />
             <label className="field"><span>Status</span><select value={draft.bonus?.status || "Not Started"} onChange={(event) => set("bonus.status", event.target.value)}>{["Not Started", "In Progress", "Met", "Received"].map((item) => <option key={item}>{item}</option>)}</select></label>
           </FormSection>
-          <FormSection number="04" title="Dates">
+          <FormSection number="05" title="Dates">
             {[
               ["Applied", "dates.applied"],
               ["Approved", "dates.approved"],
@@ -504,6 +681,14 @@ function CardEditor({ card, tags, onClose, onSave }) {
               ["Activated", "dates.activated"],
               ["First charge", "dates.firstCharge"],
             ].map(([label, path]) => <Input key={path} label={label} type="date" value={path.split(".").reduce((obj, key) => obj?.[key], draft) || ""} onChange={(value) => set(path, value)} />)}
+          </FormSection>
+          <FormSection number="06" title="Fee and cancellation">
+            <label className="field"><span>Fee month</span><select value={draft.feeMonth || ""} onChange={(event) => set("feeMonth", event.target.value)}><option value="">N/A</option>{MONTHS.map((month) => <option key={month}>{month}</option>)}</select></label>
+            <Input label="Waived count" type="number" value={draft.feeHistory?.waivedCount || 0} onChange={(value) => set("feeHistory.waivedCount", Number(value))} />
+            <Input label="Paid count" type="number" value={draft.feeHistory?.paidCount || 0} onChange={(value) => set("feeHistory.paidCount", Number(value))} />
+            <Input label="Cancelled" type="date" value={draft.dates?.cancelled || ""} onChange={(value) => set("dates.cancelled", value)} />
+            <Input label="Re-apply" type="date" value={draft.dates?.reapply || ""} onChange={(value) => set("dates.reapply", value)} />
+            <label className="field"><span>Status</span><select value={draft.status || "active"} onChange={(event) => set("status", event.target.value)}><option value="active">Active</option><option value="cancelled">Cancelled</option></select></label>
           </FormSection>
         </div>
         <div className="drawer-foot">
@@ -524,6 +709,7 @@ function filterCards(cards, { query, showCancelled, bank, tag, sort }) {
   if (sort === "due") result = [...result].sort((a, b) => daysUntilMonth(a.feeMonth) - daysUntilMonth(b.feeMonth));
   else if (sort === "fee-desc") result = [...result].sort((a, b) => b.annualFee - a.annualFee);
   else if (sort === "fee-asc") result = [...result].sort((a, b) => a.annualFee - b.annualFee);
+  else if (sort === "bank") result = [...result].sort((a, b) => `${a.bank} ${a.name}`.localeCompare(`${b.bank} ${b.name}`));
   else result = [...result].sort((a, b) => a.sortOrder - b.sortOrder);
   return result;
 }
@@ -572,8 +758,10 @@ function CardRow({ card, hideLast4, onOpen, compact, children }) {
 
 function CardArt({ card, large, hideLast4 }) {
   const [from, to] = bankColor(card.bank);
+  const hasImage = card.imageFilename && card.imageFilename !== "default.png";
   return (
     <div className={`card-art ${large ? "large" : ""}`} style={{ background: `linear-gradient(135deg, ${from}, ${to})` }}>
+      {hasImage && <img src={imageUrl(card.imageFilename)} alt={`${card.bank} ${card.name}`} />}
       {large ? (
         <>
           <span>{card.bank}</span>
