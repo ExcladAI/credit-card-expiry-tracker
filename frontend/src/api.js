@@ -40,6 +40,7 @@ export const api = {
     return request("/api/images", { method: "POST", body: form });
   },
   backup: () => request("/api/backups", { method: "POST" }),
+  diagnostics: () => request("/api/diagnostics"),
 };
 
 export function imageUrl(filename) {

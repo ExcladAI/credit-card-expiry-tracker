@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  AlertTriangle,
   Archive,
   Bell,
   CalendarClock,
   Check,
   ChevronRight,
-  CreditCard,
   Download,
   Eye,
   EyeOff,
@@ -20,7 +20,6 @@ import {
   RefreshCcw,
   Search,
   Settings,
-  SlidersHorizontal,
   Sun,
   Tag,
   Trash2,
@@ -38,52 +37,54 @@ import {
   fmtMoney,
   fmtMoneyShort,
   isBonusActive,
-  monthIndex,
 } from "./utils";
 import "./styles.css";
 
 const nav = [
-  { id: "overview", label: "Overview", icon: Home },
-  { id: "cards", label: "Cards", icon: WalletCards },
-  { id: "bonuses", label: "Bonuses", icon: Check },
-  { id: "fees", label: "Fees", icon: CalendarClock },
-  { id: "sort", label: "Sort order", icon: ListOrdered },
-  { id: "tags", label: "Tags", icon: Tag },
-  { id: "notifications", label: "Notifications", icon: MessageCircle },
-  { id: "settings", label: "Settings", icon: Settings },
+  { id: "overview",      label: "Overview",       icon: Home },
+  { id: "cards",         label: "Cards",           icon: WalletCards },
+  { id: "bonuses",       label: "Bonuses",         icon: Check },
+  { id: "fees",          label: "Fees",            icon: CalendarClock },
+  { id: "sort",          label: "Sort order",      icon: ListOrdered },
+  { id: "tags",          label: "Tags",            icon: Tag },
+  { id: "notifications", label: "Notifications",   icon: MessageCircle },
+  { id: "settings",      label: "Settings",        icon: Settings },
 ];
 
 function App() {
-  const [cards, setCards] = useState([]);
-  const [tags, setTags] = useState([]);
-  const [page, setPage] = useState("overview");
+  const [cards, setCards]         = useState([]);
+  const [tags, setTags]           = useState([]);
+  const [page, setPage]           = useState("overview");
   const [selectedId, setSelectedId] = useState(null);
-  const [editing, setEditing] = useState(null);
-  const [query, setQuery] = useState("");
+  const [editing, setEditing]     = useState(null);
+  const [query, setQuery]         = useState("");
   const [showCancelled, setShowCancelled] = useState(true);
   const [hideLast4, setHideLast4] = useState(false);
-  const [theme, setTheme] = useState(() => localStorage.getItem("card-tracker-theme") || "light");
-  const [density, setDensity] = useState(() => localStorage.getItem("card-tracker-density") || "comfortable");
-  const [loading, setLoading] = useState(true);
-  const [toast, setToast] = useState("");
+  const [theme, setTheme]         = useState(() => localStorage.getItem("card-tracker-theme") || "light");
+  const [density, setDensity]     = useState(() => localStorage.getItem("card-tracker-density") || "comfortable");
+  const [loading, setLoading]     = useState(true);
+  const [toast, setToast]         = useState("");
+  const [diagData, setDiagData]   = useState(null);
 
   async function refresh() {
-    const [nextCards, nextTags] = await Promise.all([api.cards(), api.tags()]);
+    const [nextCards, nextTags, nextDiag] = await Promise.all([
+      api.cards(),
+      api.tags(),
+      api.diagnostics().catch(() => null),
+    ]);
     setCards(nextCards);
     setTags(nextTags);
+    setDiagData(nextDiag);
     setLoading(false);
   }
 
   useEffect(() => {
-    refresh().catch((error) => {
-      setToast(error.message);
-      setLoading(false);
-    });
+    refresh().catch((err) => { setToast(err.message); setLoading(false); });
   }, []);
 
   useEffect(() => {
     if (!toast) return;
-    const id = setTimeout(() => setToast(""), 2600);
+    const id = setTimeout(() => setToast(""), 2800);
     return () => clearTimeout(id);
   }, [toast]);
 
@@ -97,7 +98,7 @@ function App() {
     localStorage.setItem("card-tracker-density", density);
   }, [density]);
 
-  const selected = cards.find((card) => card.id === selectedId);
+  const selected = cards.find((c) => c.id === selectedId);
 
   async function mutate(fn, message) {
     try {
@@ -105,88 +106,93 @@ function App() {
       if (Array.isArray(next)) setCards(next);
       else await refresh();
       if (message) setToast(message);
-    } catch (error) {
-      setToast(error.message);
+    } catch (err) {
+      setToast(err.message);
     }
   }
 
   const counts = useMemo(() => {
-    const active = cards.filter((card) => card.status === "active");
-    const cancelled = cards.filter((card) => card.status === "cancelled");
-    const urgentFees = active.filter((card) => daysUntilMonth(card.feeMonth) <= 30).length;
-    const bonuses = active.filter(isBonusActive);
+    const active    = cards.filter((c) => c.status === "active");
+    const cancelled = cards.filter((c) => c.status === "cancelled");
+    const urgentFees = active.filter((c) => daysUntilMonth(c.feeMonth) <= 30).length;
+    const bonuses    = active.filter(isBonusActive);
     return { active, cancelled, urgentFees, bonuses };
   }, [cards]);
 
+  function navigate(p) { setSelectedId(null); setPage(p); }
+
   return (
-    <div className="app-shell">
+    <div className="app">
+      {/* ── Sidebar ── */}
       <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">CC</div>
+        <div className="sidebar-brand">
+          <div className="mark">CC</div>
           <div>
-            <div className="brand-name">Card Tracker</div>
-            <div className="brand-sub">Private finance console</div>
+            <div className="name">Card Tracker</div>
+            <div className="sub">Private finance console</div>
           </div>
         </div>
 
-        <div className="nav-label">Tracking</div>
-        {nav.slice(0, 4).map((item) => (
-          <NavButton key={item.id} item={item} page={page} setPage={setPage} count={navCount(item.id, counts)} />
-        ))}
-        <div className="nav-label">Manage</div>
-        {nav.slice(4).map((item) => (
-          <NavButton key={item.id} item={item} page={page} setPage={setPage} count={navCount(item.id, counts)} />
-        ))}
+        <div className="nav-group">
+          <div className="nav-label">Tracking</div>
+          {nav.slice(0, 4).map((item) => (
+            <NavButton key={item.id} item={item} page={page} setPage={navigate} count={navCount(item.id, counts)} />
+          ))}
+        </div>
+        <div className="nav-group">
+          <div className="nav-label">Manage</div>
+          {nav.slice(4).map((item) => (
+            <NavButton key={item.id} item={item} page={page} setPage={navigate} count={navCount(item.id, counts)} />
+          ))}
+        </div>
 
         <div className="sidebar-footer">
-          <div className="footer-card">
+          <div className="footer-vault">
             <div>
-              <strong>Local vault</strong>
-              <span>{counts.active.length} active · {counts.cancelled.length} archived</span>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>Local vault</div>
+              <div className="footer-vault-counts">{counts.active.length} active · {counts.cancelled.length} cancelled</div>
             </div>
+            <button className="icon-btn" title="Toggle theme" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+              {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+            </button>
+          </div>
+          <div className="footer-toggle">
+            <span>Hide last 4</span>
+            <Toggle checked={hideLast4} onChange={setHideLast4} />
+          </div>
+          <div className="footer-toggle">
+            <span>Show cancelled</span>
+            <Toggle checked={showCancelled} onChange={setShowCancelled} />
+          </div>
+          <div className="footer-toggle">
+            <span>Compact density</span>
+            <Toggle checked={density === "compact"} onChange={(v) => setDensity(v ? "compact" : "comfortable")} />
+          </div>
+        </div>
+      </aside>
+
+      {/* ── Main ── */}
+      <main className="main">
+        <header className="topbar">
+          <div className="crumbs">
+            Dashboard / <span className="here">{nav.find((n) => n.id === page)?.label}</span>
+          </div>
+          <div className="topbar-right">
+            <div className="search">
+              <Search size={14} />
+              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search cards, banks, tags…" />
+            </div>
+            <button className="btn primary" onClick={() => setEditing(emptyCard())}>
+              <Plus size={14} /> Add card
+            </button>
             <button className="icon-btn" title="Toggle theme" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
               {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
             </button>
           </div>
-          <label className="switch-row">
-            <input type="checkbox" checked={hideLast4} onChange={(event) => setHideLast4(event.target.checked)} />
-            {hideLast4 ? <EyeOff size={15} /> : <Eye size={15} />}
-            Hide last 4
-          </label>
-          <label className="switch-row">
-            <input type="checkbox" checked={showCancelled} onChange={(event) => setShowCancelled(event.target.checked)} />
-            Show cancelled
-          </label>
-          <label className="switch-row">
-            <SlidersHorizontal size={15} />
-            Density
-            <select value={density} onChange={(event) => setDensity(event.target.value)}>
-              <option value="comfortable">Comfortable</option>
-              <option value="compact">Compact</option>
-            </select>
-          </label>
-        </div>
-      </aside>
-
-      <main className="main">
-        <header className="topbar">
-          <div>
-            <div className="crumb">Dashboard / <span>{nav.find((item) => item.id === page)?.label}</span></div>
-          </div>
-          <div className="search">
-            <Search size={15} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search cards, banks, tags..." />
-          </div>
-          <button className="btn primary" onClick={() => setEditing(emptyCard())}>
-            <Plus size={15} /> Add card
-          </button>
-          <button className="icon-btn top-icon" title="Toggle theme" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
-            {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
-          </button>
         </header>
 
         {loading ? (
-          <div className="content"><div className="panel empty">Loading tracker...</div></div>
+          <div className="content"><div className="panel empty">Loading tracker…</div></div>
         ) : (
           <Router
             page={page}
@@ -197,11 +203,12 @@ function App() {
             hideLast4={hideLast4}
             theme={theme}
             density={density}
+            diagData={diagData}
             setTheme={setTheme}
             setDensity={setDensity}
             setHideLast4={setHideLast4}
             selected={selected}
-            setPage={setPage}
+            setPage={navigate}
             setSelectedId={setSelectedId}
             setEditing={setEditing}
             mutate={mutate}
@@ -210,30 +217,46 @@ function App() {
         )}
       </main>
 
+      {/* ── Card editor drawer ── */}
       {editing && (
         <CardEditor
           card={editing}
           tags={tags}
           onClose={() => setEditing(null)}
-          onSave={(payload) => mutate(
-            () => payload.id ? api.updateCard(payload.id, payload) : api.createCard(payload),
-            payload.id ? "Card updated" : "Card added"
-          ).then(() => setEditing(null))}
+          onSave={(payload) =>
+            mutate(
+              () => payload.id ? api.updateCard(payload.id, payload) : api.createCard(payload),
+              payload.id ? "Card updated" : "Card added"
+            ).then(() => setEditing(null))
+          }
         />
       )}
 
-      {toast && <div className="toast">{toast}</div>}
+      {toast && <div className="toast show">{toast}</div>}
     </div>
   );
 }
 
+/* ── Toggle switch ── */
+function Toggle({ checked, onChange }) {
+  return (
+    <button
+      className={`toggle ${checked ? "on" : ""}`}
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+    />
+  );
+}
+
+/* ── Nav helpers ── */
 function navCount(id, counts) {
-  if (id === "cards") return counts.active.length;
-  if (id === "fees") return counts.urgentFees;
-  if (id === "bonuses") return counts.bonuses.length;
-  if (id === "sort") return counts.active.length;
+  if (id === "cards")         return counts.active.length;
+  if (id === "fees")          return counts.urgentFees;
+  if (id === "bonuses")       return counts.bonuses.length;
+  if (id === "sort")          return counts.active.length;
   if (id === "notifications") return counts.urgentFees + counts.bonuses.length;
-  if (id === "tags") return "";
+  if (id === "tags")          return "";
   return null;
 }
 
@@ -241,117 +264,164 @@ function NavButton({ item, page, setPage, count }) {
   const Icon = item.icon;
   return (
     <button className={`nav-item ${page === item.id ? "active" : ""}`} onClick={() => setPage(item.id)}>
-      <Icon size={16} />
+      <span className="nav-icon"><Icon size={15} /></span>
       <span>{item.label}</span>
       {count !== null && count !== "" && <span className="nav-count">{count}</span>}
     </button>
   );
 }
 
+/* ── Router ── */
 function Router(props) {
-  if (props.selected) return <Details {...props} />;
-  if (props.page === "cards") return <CardsPage {...props} />;
-  if (props.page === "bonuses") return <BonusesPage {...props} />;
-  if (props.page === "fees") return <FeesPage {...props} />;
-  if (props.page === "sort") return <SortPage {...props} />;
-  if (props.page === "tags") return <TagsPage {...props} />;
+  if (props.selected)             return <Details {...props} />;
+  if (props.page === "cards")     return <CardsPage {...props} />;
+  if (props.page === "bonuses")   return <BonusesPage {...props} />;
+  if (props.page === "fees")      return <FeesPage {...props} />;
+  if (props.page === "sort")      return <SortPage {...props} />;
+  if (props.page === "tags")      return <TagsPage {...props} />;
   if (props.page === "notifications") return <NotificationsPage {...props} />;
-  if (props.page === "settings") return <SettingsPage {...props} />;
+  if (props.page === "settings")  return <SettingsPage {...props} />;
   return <Overview {...props} />;
 }
 
-function Overview({ cards, hideLast4, setPage, setSelectedId, setEditing, mutate }) {
-  const active = cards.filter((card) => card.status === "active");
-  const cancelled = cards.filter((card) => card.status === "cancelled");
+/* ── Overview ── */
+function Overview({ cards, hideLast4, diagData, setPage, setSelectedId, setEditing, mutate }) {
+  const active    = cards.filter((c) => c.status === "active");
+  const cancelled = cards.filter((c) => c.status === "cancelled");
   const upcomingFees = active
-    .map((card) => ({ card, days: daysUntilMonth(card.feeMonth), tone: feeTone(card) }))
-    .filter((item) => item.days <= 60)
+    .map((c) => ({ card: c, days: daysUntilMonth(c.feeMonth), tone: feeTone(c) }))
+    .filter((x) => x.days <= 60)
     .sort((a, b) => a.days - b.days);
   const activeBonuses = active.filter(isBonusActive);
-  const ready = cancelled.filter((card) => card.dates?.reapply && new Date(card.dates.reapply) <= new Date());
-  const totalFees = active.reduce((sum, card) => sum + Number(card.annualFee || 0), 0);
-  const urgent = upcomingFees.filter((item) => item.days <= 30).length + activeBonuses.filter((card) => bonusProgress(card).days <= 30).length;
-  const calendar = MONTHS.map((month) => {
-    const due = active.filter((card) => card.feeMonth === month);
-    return { month, count: due.length, total: due.reduce((sum, card) => sum + Number(card.annualFee || 0), 0) };
+  const ready      = cancelled.filter((c) => c.dates?.reapply && new Date(c.dates.reapply) <= new Date());
+  const totalFees  = active.reduce((s, c) => s + Number(c.annualFee || 0), 0);
+  const urgent     = upcomingFees.filter((x) => x.days <= 30).length +
+                     activeBonuses.filter((c) => bonusProgress(c).days <= 30).length;
+  const calendar   = MONTHS.map((month) => {
+    const due = active.filter((c) => c.feeMonth === month);
+    return { month, count: due.length, total: due.reduce((s, c) => s + Number(c.annualFee || 0), 0) };
   });
 
   return (
     <div className="content">
-      <PageHeader title="Overview" sub={`${active.length} active cards · ${cancelled.length} cancelled · ${new Date().toLocaleDateString("en-GB", { dateStyle: "full" })}`}>
+      <PageHeader
+        title="Overview"
+        sub={`${active.length} active · ${cancelled.length} cancelled · ${new Date().toLocaleDateString("en-GB", { dateStyle: "full" })}`}
+      >
         <a className="btn" href="/api/export"><Download size={14} /> Export CSV</a>
         <button className="btn" onClick={() => mutate(api.backup, "Backup created")}><Archive size={14} /> Backup</button>
         <button className="btn primary" onClick={() => setEditing(emptyCard())}><Plus size={14} /> Add card</button>
       </PageHeader>
 
+      {diagData?.counts.issues > 0 && (
+        <button className="diag-bar" onClick={() => setPage("settings")}>
+          <AlertTriangle size={14} />
+          <span>{diagData.counts.issues} data health issue{diagData.counts.issues !== 1 ? "s" : ""} detected</span>
+          <ChevronRight size={13} />
+        </button>
+      )}
+
       <section className="metrics">
-        <Metric label="Active cards" value={active.length} foot={`${new Set(active.map((card) => card.bank)).size} banks`} />
-        <Metric label="Total annual fees" value={fmtMoneyShort(totalFees)} foot={`${active.filter((card) => card.annualFee > 0).length} fee-bearing`} />
-        <Metric label="Due next 60 days" value={upcomingFees.length} foot={`${upcomingFees.filter((item) => item.days <= 30).length} due this month`} urgent />
-        <Metric label="Bonuses in progress" value={activeBonuses.length} foot={`${cards.filter((card) => card.bonus?.status === "Met").length} met`} />
-        <Metric label="Urgent deadlines" value={urgent} foot="need attention" urgent />
+        <Metric label="Active cards"       value={active.length}            foot={`${new Set(active.map((c) => c.bank)).size} banks`} />
+        <Metric label="Total annual fees"  value={fmtMoneyShort(totalFees)} foot={`${active.filter((c) => c.annualFee > 0).length} fee-bearing`} />
+        <Metric label="Due next 60 days"   value={upcomingFees.length}      foot={`${upcomingFees.filter((x) => x.days <= 30).length} due this month`} urgent />
+        <Metric label="Bonuses in progress" value={activeBonuses.length}    foot={`${cards.filter((c) => c.bonus?.status === "Met").length} met`} />
+        <Metric label="Urgent deadlines"   value={urgent}                   foot="need attention" urgent />
       </section>
 
       <section className="grid two">
-        <Panel title="Annual fee alerts" sub="Charges in the next 60 days" action={<button className="link-btn" onClick={() => setPage("fees")}>View all <ChevronRight size={13} /></button>}>
-          {upcomingFees.length ? upcomingFees.slice(0, 6).map(({ card, days, tone }) => (
-            <CardRow key={card.id} card={card} hideLast4={hideLast4} compact onOpen={() => setSelectedId(card.id)}>
-              <div className="money">{fmtMoney(card.annualFee)}</div>
-              <span className={`pill ${tone}`}>{days}d</span>
-            </CardRow>
-          )) : <Empty>No fees due soon.</Empty>}
+        <Panel
+          title="Annual fee alerts"
+          sub="Charges in the next 60 days"
+          action={<button className="link-btn" onClick={() => setPage("fees")}>View all <ChevronRight size={13} /></button>}
+        >
+          {upcomingFees.length
+            ? upcomingFees.slice(0, 6).map(({ card, days, tone }) => (
+                <CardRow key={card.id} card={card} hideLast4={hideLast4} compact onOpen={() => setSelectedId(card.id)}>
+                  <div className="money">{fmtMoney(card.annualFee)}</div>
+                  <span className={`pill ${tone}`}>{days}d</span>
+                </CardRow>
+              ))
+            : <Empty>No fees due soon.</Empty>}
         </Panel>
 
         <Panel title="Re-apply ready" sub="Cancelled cards eligible again">
-          {ready.length ? ready.map((card) => (
-            <CardRow key={card.id} card={card} hideLast4 compact onOpen={() => setSelectedId(card.id)}>
-              <button className="btn small" onClick={(event) => { event.stopPropagation(); setEditing({ ...card, id: undefined, status: "active", dates: {} }); }}>Re-add</button>
-            </CardRow>
-          )) : <Empty>Nothing eligible right now.</Empty>}
+          {ready.length
+            ? ready.map((card) => (
+                <CardRow key={card.id} card={card} hideLast4 compact onOpen={() => setSelectedId(card.id)}>
+                  <button
+                    className="btn small"
+                    onClick={(e) => { e.stopPropagation(); setEditing({ ...card, id: undefined, status: "active", dates: {} }); }}
+                  >Re-add</button>
+                </CardRow>
+              ))
+            : <Empty>Nothing eligible right now.</Empty>}
         </Panel>
       </section>
 
       <Panel title="12-month fee calendar" sub="Annual fee density by month">
         <div className="calendar-strip">
-          {calendar.map((item) => (
-            <button key={item.month} className={`month-cell ${item.count ? "has-fees" : ""}`} onClick={() => setPage("fees")}>
-              <span>{item.month.slice(0, 3)}</span>
-              <strong>{item.count}</strong>
-              <small>{item.total ? fmtMoneyShort(item.total) : "No fees"}</small>
+          {calendar.map(({ month, count, total }) => (
+            <button key={month} className={`month-cell ${count ? "has-fees" : ""}`} onClick={() => setPage("fees")}>
+              <span>{month.slice(0, 3)}</span>
+              <strong>{count}</strong>
+              <small>{total ? fmtMoneyShort(total) : "—"}</small>
             </button>
           ))}
         </div>
       </Panel>
 
       <Panel title="Welcome bonus tracker" sub={`${activeBonuses.length} active bonus windows`}>
-        {activeBonuses.length ? activeBonuses
-          .sort((a, b) => (bonusProgress(a).days || 999) - (bonusProgress(b).days || 999))
-          .map((card) => <BonusRow key={card.id} card={card} onOpen={() => setSelectedId(card.id)} />) : <Empty>No active minimum spend deadlines.</Empty>}
+        {activeBonuses.length
+          ? activeBonuses
+              .sort((a, b) => (bonusProgress(a).days || 999) - (bonusProgress(b).days || 999))
+              .map((card) => <BonusRow key={card.id} card={card} onOpen={() => setSelectedId(card.id)} />)
+          : <Empty>No active minimum spend deadlines.</Empty>}
       </Panel>
     </div>
   );
 }
 
+/* ── Cards page ── */
 function CardsPage({ cards, tags, query, showCancelled, hideLast4, setSelectedId, setEditing, mutate }) {
   const [bank, setBank] = useState("");
-  const [tag, setTag] = useState("");
+  const [tag, setTag]   = useState("");
   const [sort, setSort] = useState("manual");
-  const banks = [...new Set(cards.map((card) => card.bank).filter(Boolean))].sort();
+  const banks   = [...new Set(cards.map((c) => c.bank).filter(Boolean))].sort();
   const visible = filterCards(cards, { query, showCancelled, bank, tag, sort });
 
   return (
     <div className="content">
-      <PageHeader title="Cards" sub={`${visible.length} cards shown`}>
+      <PageHeader title="Cards" sub={`${visible.length} of ${cards.length} cards shown`}>
         <button className="btn primary" onClick={() => setEditing(emptyCard())}><Plus size={14} /> Add card</button>
       </PageHeader>
+
       <div className="filterbar">
-        <Select value={bank} onChange={setBank} options={["", ...banks]} label="Bank" />
-        <Select value={tag} onChange={setTag} options={["", ...tags]} label="Tag" />
-        <Select value={sort} onChange={setSort} options={["manual", "due", "fee-desc", "fee-asc", "bank"]} label="Sort" />
+        <span className="filterbar-label">Bank</span>
+        <select value={bank} onChange={(e) => setBank(e.target.value)}>
+          <option value="">All banks</option>
+          {banks.map((b) => <option key={b} value={b}>{b}</option>)}
+        </select>
+        <div className="filterbar-sep" />
+        <span className="filterbar-label">Tag</span>
+        <select value={tag} onChange={(e) => setTag(e.target.value)}>
+          <option value="">All tags</option>
+          {tags.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <div className="filterbar-sep" />
+        <span className="filterbar-label">Sort</span>
+        <select value={sort} onChange={(e) => setSort(e.target.value)}>
+          <option value="manual">Manual</option>
+          <option value="due">Fee due date</option>
+          <option value="fee-desc">Fee ↓</option>
+          <option value="fee-asc">Fee ↑</option>
+          <option value="bank">Bank</option>
+        </select>
       </div>
+
       <Panel flush>
         <div className="table-head">
-          <span>Card</span><span>Annual fee</span><span>Fee month</span><span>Status</span><span></span>
+          <span>Card</span><span>Annual fee</span><span>Fee month</span><span>Status</span><span />
         </div>
         {visible.map((card) => (
           <CardRow key={card.id} card={card} hideLast4={hideLast4} onOpen={() => setSelectedId(card.id)}>
@@ -361,124 +431,148 @@ function CardsPage({ cards, tags, query, showCancelled, hideLast4, setSelectedId
             <RowActions card={card} setEditing={setEditing} mutate={mutate} />
           </CardRow>
         ))}
+        {visible.length === 0 && <Empty>No cards match your filters.</Empty>}
       </Panel>
     </div>
   );
 }
 
+/* ── Bonuses page ── */
 function BonusesPage({ cards, setSelectedId, mutate }) {
-  const bonuses = cards.filter((card) => card.bonus?.deadline);
+  const bonuses = cards.filter((c) => c.bonus?.deadline);
   return (
     <div className="content">
       <PageHeader title="Bonuses" sub={`${bonuses.length} welcome offers tracked`} />
       <Panel title="Bonus progress">
-        {bonuses.length ? bonuses.map((card) => (
-          <BonusRow key={card.id} card={card} onOpen={() => setSelectedId(card.id)}>
-            <button className="btn small" onClick={(event) => {
-              event.stopPropagation();
-              const amount = Number(prompt("Add spend amount"));
-              if (amount > 0) mutate(() => api.addSpend(card.id, amount), "Spend updated");
-            }}>Add spend</button>
-          </BonusRow>
-        )) : <Empty>No welcome bonuses recorded.</Empty>}
+        {bonuses.length
+          ? bonuses.map((card) => (
+              <BonusRow key={card.id} card={card} onOpen={() => setSelectedId(card.id)}>
+                <button
+                  className="btn small"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const amount = Number(prompt("Add spend amount"));
+                    if (amount > 0) mutate(() => api.addSpend(card.id, amount), "Spend updated");
+                  }}
+                >Add spend</button>
+              </BonusRow>
+            ))
+          : <Empty>No welcome bonuses recorded.</Empty>}
       </Panel>
     </div>
   );
 }
 
+/* ── Fees page ── */
 function FeesPage({ cards, hideLast4, setSelectedId, mutate }) {
-  const active = cards.filter((card) => card.status === "active");
-  const byDue = active.map((card) => ({ card, days: daysUntilMonth(card.feeMonth) })).sort((a, b) => a.days - b.days);
+  const active = cards.filter((c) => c.status === "active");
+  const byDue  = active.map((c) => ({ card: c, days: daysUntilMonth(c.feeMonth) })).sort((a, b) => a.days - b.days);
   return (
     <div className="content">
       <PageHeader title="Annual fees" sub="Waiver and payment tracking" />
       <Panel title="Fee queue">
         {byDue.map(({ card, days }) => (
-          <CardRow key={card.id} card={card} hideLast4={hideLast4} onOpen={() => setSelectedId(card.id)}>
+          <CardRow key={card.id} card={card} hideLast4={hideLast4} compact onOpen={() => setSelectedId(card.id)}>
             <div className="money">{fmtMoney(card.annualFee)}</div>
             <span className={`pill ${days <= 30 ? "rose" : days <= 60 ? "amber" : "teal"}`}>{days}d</span>
-            <button className="btn small" onClick={(event) => { event.stopPropagation(); mutate(() => api.feeAction(card.id, "Waived"), "Marked waived"); }}>Waived</button>
-            <button className="btn small" onClick={(event) => { event.stopPropagation(); mutate(() => api.feeAction(card.id, "Paid"), "Marked paid"); }}>Paid</button>
+            <button className="btn small" onClick={(e) => { e.stopPropagation(); mutate(() => api.feeAction(card.id, "Waived"), "Marked waived"); }}>Waived</button>
+            <button className="btn small" onClick={(e) => { e.stopPropagation(); mutate(() => api.feeAction(card.id, "Paid"),   "Marked paid");   }}>Paid</button>
           </CardRow>
         ))}
+        {byDue.length === 0 && <Empty>No active cards with fees.</Empty>}
       </Panel>
     </div>
   );
 }
 
+/* ── Tags page ── */
 function TagsPage({ cards, tags, refresh, mutate }) {
   const [newTag, setNewTag] = useState("");
-  const counts = Object.fromEntries(tags.map((tag) => [tag, cards.filter((card) => card.tags.includes(tag)).length]));
+  const counts = Object.fromEntries(tags.map((t) => [t, cards.filter((c) => c.tags.includes(t)).length]));
+
+  function addTag() {
+    if (!newTag.trim()) return;
+    mutate(() => api.saveTags([...tags, newTag.trim()]).then(refresh), "Tag added");
+    setNewTag("");
+  }
+
   return (
     <div className="content">
       <PageHeader title="Tags" sub="Manage card labels" />
       <Panel title="Existing tags">
         <div className="tag-grid">
-          {tags.map((tag) => (
-            <span className="tag-chip" key={tag}>{tag}<b>{counts[tag]}</b><button onClick={() => mutate(() => api.deleteTag(tag).then(refresh), "Tag deleted")}><Trash2 size={12} /></button></span>
+          {tags.map((t) => (
+            <span className="tag-chip" key={t}>
+              {t}<b>{counts[t]}</b>
+              <button onClick={() => mutate(() => api.deleteTag(t).then(refresh), "Tag deleted")}><Trash2 size={12} /></button>
+            </span>
           ))}
+          {tags.length === 0 && <span style={{ color: "var(--muted)", fontSize: 13 }}>No tags yet.</span>}
         </div>
         <div className="inline-form">
-          <input value={newTag} onChange={(event) => setNewTag(event.target.value)} placeholder="New tag" />
-          <button className="btn primary" onClick={() => {
-            if (!newTag.trim()) return;
-            mutate(() => api.saveTags([...tags, newTag.trim()]).then(refresh), "Tag added");
-            setNewTag("");
-          }}>Add tag</button>
+          <input
+            value={newTag}
+            onChange={(e) => setNewTag(e.target.value)}
+            placeholder="New tag name"
+            onKeyDown={(e) => e.key === "Enter" && addTag()}
+          />
+          <button className="btn primary" onClick={addTag}>Add tag</button>
         </div>
       </Panel>
     </div>
   );
 }
 
+/* ── Sort page ── */
 function SortPage({ cards, hideLast4, setSelectedId, mutate }) {
-  const active = cards.filter((card) => card.status === "active").sort((a, b) => a.sortOrder - b.sortOrder);
-  const [orders, setOrders] = useState(() => Object.fromEntries(active.map((card, index) => [card.id, card.sortOrder || index + 1])));
+  const active = cards.filter((c) => c.status === "active").sort((a, b) => a.sortOrder - b.sortOrder);
+  const [orders, setOrders] = useState(() =>
+    Object.fromEntries(active.map((c, i) => [c.id, c.sortOrder || i + 1]))
+  );
 
   useEffect(() => {
-    setOrders(Object.fromEntries(active.map((card, index) => [card.id, card.sortOrder || index + 1])));
+    setOrders(Object.fromEntries(active.map((c, i) => [c.id, c.sortOrder || i + 1])));
   }, [cards.length]);
 
-  const values = Object.values(orders).map(Number).filter(Boolean);
-  const duplicates = values.filter((value, index) => values.indexOf(value) !== index);
-  const hasDuplicates = duplicates.length > 0;
+  const values     = Object.values(orders).map(Number).filter(Boolean);
+  const duplicates = values.filter((v, i) => values.indexOf(v) !== i);
 
   function renumber() {
-    setOrders(Object.fromEntries(active.map((card, index) => [card.id, index + 1])));
+    setOrders(Object.fromEntries(active.map((c, i) => [c.id, i + 1])));
   }
 
-  function bump(cardId, delta) {
+  function bump(id, delta) {
     const sorted = active
-      .map((card) => ({ id: card.id, order: Number(orders[card.id] || card.sortOrder || 99) }))
+      .map((c) => ({ id: c.id, order: Number(orders[c.id] || c.sortOrder || 99) }))
       .sort((a, b) => a.order - b.order);
-    const index = sorted.findIndex((item) => item.id === cardId);
-    const swap = index + delta;
+    const idx = sorted.findIndex((x) => x.id === id);
+    const swap = idx + delta;
     if (swap < 0 || swap >= sorted.length) return;
-    [sorted[index], sorted[swap]] = [sorted[swap], sorted[index]];
-    setOrders(Object.fromEntries(sorted.map((item, nextIndex) => [item.id, nextIndex + 1])));
+    [sorted[idx], sorted[swap]] = [sorted[swap], sorted[idx]];
+    setOrders(Object.fromEntries(sorted.map((x, i) => [x.id, i + 1])));
   }
 
   return (
     <div className="content">
-      <PageHeader title="Sort order" sub="Manual order used by the card list and bot responses">
-        {hasDuplicates && <span className="pill rose">Duplicate order values</span>}
+      <PageHeader title="Sort order" sub="Manual order for card list and bot responses">
+        {duplicates.length > 0 && <span className="pill rose">Duplicate order values</span>}
         <button className="btn" onClick={renumber}><ListOrdered size={14} /> Renumber</button>
         <button className="btn primary" onClick={() => mutate(() => api.sortOrder(orders), "Sort order saved")}>Save order</button>
       </PageHeader>
-      <Panel title="Active cards" sub="Use arrows or order numbers to control display priority">
-        {active.map((card, index) => (
+      <Panel title="Active cards" sub="Use arrows or type an order number">
+        {active.map((card, i) => (
           <div className="sort-row" key={card.id}>
             <GripVertical size={15} />
             <CardRow card={card} hideLast4={hideLast4} compact onOpen={() => setSelectedId(card.id)}>
-              <button className="btn small" disabled={index === 0} onClick={(event) => { event.stopPropagation(); bump(card.id, -1); }}>Up</button>
-              <button className="btn small" disabled={index === active.length - 1} onClick={(event) => { event.stopPropagation(); bump(card.id, 1); }}>Down</button>
+              <button className="btn small" disabled={i === 0}              onClick={(e) => { e.stopPropagation(); bump(card.id, -1); }}>↑</button>
+              <button className="btn small" disabled={i === active.length - 1} onClick={(e) => { e.stopPropagation(); bump(card.id,  1); }}>↓</button>
             </CardRow>
             <input
-              className={duplicates.includes(Number(orders[card.id])) ? "order-input duplicate" : "order-input"}
+              className={`order-input ${duplicates.includes(Number(orders[card.id])) ? "duplicate" : ""}`}
               type="number"
               min="1"
               value={orders[card.id] || ""}
-              onChange={(event) => setOrders({ ...orders, [card.id]: Number(event.target.value) })}
+              onChange={(e) => setOrders({ ...orders, [card.id]: Number(e.target.value) })}
             />
           </div>
         ))}
@@ -487,15 +581,22 @@ function SortPage({ cards, hideLast4, setSelectedId, mutate }) {
   );
 }
 
+/* ── Notifications page ── */
 function NotificationsPage({ cards, hideLast4, setSelectedId }) {
-  const active = cards.filter((card) => card.status === "active");
+  const active = cards.filter((c) => c.status === "active");
   const events = [
     ...active
-      .map((card) => ({ card, type: "Annual fee", days: daysUntilMonth(card.feeMonth), tone: feeTone(card), detail: `${fmtMoney(card.annualFee)} due in ${card.feeMonth || "N/A"}` }))
-      .filter((event) => event.days <= 60),
+      .map((c) => ({ card: c, type: "Annual fee", days: daysUntilMonth(c.feeMonth), tone: feeTone(c), detail: `${fmtMoney(c.annualFee)} due in ${c.feeMonth || "N/A"}` }))
+      .filter((e) => e.days <= 60),
     ...active
       .filter(isBonusActive)
-      .map((card) => ({ card, type: "Welcome bonus", days: bonusProgress(card).days ?? 999, tone: bonusProgress(card).days <= 30 ? "rose" : "amber", detail: `${fmtMoney(bonusProgress(card).remaining)} remaining` })),
+      .map((c) => ({
+        card: c,
+        type: "Welcome bonus",
+        days: bonusProgress(c).days ?? 999,
+        tone: (bonusProgress(c).days ?? 999) <= 30 ? "rose" : "amber",
+        detail: `${fmtMoney(bonusProgress(c).remaining)} remaining`,
+      })),
   ].sort((a, b) => a.days - b.days);
 
   return (
@@ -504,124 +605,224 @@ function NotificationsPage({ cards, hideLast4, setSelectedId }) {
       <section className="grid two">
         <Panel title="Telegram bot" sub="Uses the same local data as this dashboard">
           <div className="bot-card">
-            <div className="bot-icon"><Bell size={18} /></div>
+            <div className="bot-icon"><Bell size={16} /></div>
             <div>
               <strong>Reminder bot configured by environment</strong>
-              <p>Keep `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`; the dashboard never exposes them.</p>
+              <p>Keep <code>TELEGRAM_BOT_TOKEN</code> and <code>TELEGRAM_CHAT_ID</code> in <code>.env</code>; the dashboard never exposes them.</p>
             </div>
           </div>
           <div className="command-list">
-            {["/cards", "/info", "/fees", "/bonus", "/track", "/stats", "/backup", "/export"].map((cmd) => <code key={cmd}>{cmd}</code>)}
+            {["/cards", "/info", "/fees", "/bonus", "/track", "/stats", "/backup", "/export"].map((cmd) => (
+              <code key={cmd}>{cmd}</code>
+            ))}
           </div>
         </Panel>
         <Panel title="Upcoming notification queue" sub={`${events.length} reminders from real card data`}>
-          {events.length ? events.map((event) => (
-            <CardRow key={`${event.type}-${event.card.id}`} card={event.card} hideLast4={hideLast4} compact onOpen={() => setSelectedId(event.card.id)}>
-              <span className={`pill ${event.tone}`}>{event.days}d</span>
-              <div className="muted-note">{event.type} · {event.detail}</div>
-            </CardRow>
-          )) : <Empty>No notifications due in the next 60 days.</Empty>}
+          {events.length
+            ? events.map((event) => (
+                <CardRow key={`${event.type}-${event.card.id}`} card={event.card} hideLast4={hideLast4} compact onOpen={() => setSelectedId(event.card.id)}>
+                  <span className={`pill ${event.tone}`}>{event.days}d</span>
+                  <div className="muted-note">{event.type} · {event.detail}</div>
+                </CardRow>
+              ))
+            : <Empty>No notifications due in the next 60 days.</Empty>}
         </Panel>
       </section>
     </div>
   );
 }
 
-function SettingsPage({ mutate, theme, density, hideLast4, setTheme, setDensity, setHideLast4 }) {
+/* ── Settings page ── */
+function SettingsPage({ mutate, theme, density, hideLast4, setTheme, setDensity, setHideLast4, diagData }) {
   return (
     <div className="content">
-      <PageHeader title="Settings" sub="Export, backups, and bot reference" />
+      <PageHeader title="Settings" sub="Display preferences, data export, and health" />
       <section className="grid two">
         <Panel title="Display">
-          <div className="setting-row"><span>Theme</span><button className="btn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun size={14} /> : <Moon size={14} />} {theme === "dark" ? "Dark" : "Light"}</button></div>
-          <div className="setting-row"><span>Privacy</span><button className="btn" onClick={() => setHideLast4(!hideLast4)}>{hideLast4 ? <EyeOff size={14} /> : <Eye size={14} />} {hideLast4 ? "Last 4 hidden" : "Last 4 visible"}</button></div>
-          <div className="setting-row"><span>Density</span><select value={density} onChange={(event) => setDensity(event.target.value)}><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></div>
+          <div className="setting-row">
+            <span>Theme</span>
+            <button className="btn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+              {theme === "dark" ? <><Sun size={14} /> Dark</> : <><Moon size={14} /> Light</>}
+            </button>
+          </div>
+          <div className="setting-row">
+            <span>Privacy</span>
+            <button className="btn" onClick={() => setHideLast4(!hideLast4)}>
+              {hideLast4 ? <><EyeOff size={14} /> Last 4 hidden</> : <><Eye size={14} /> Last 4 visible</>}
+            </button>
+          </div>
+          <div className="setting-row">
+            <span>Density</span>
+            <select value={density} onChange={(e) => setDensity(e.target.value)}>
+              <option value="comfortable">Comfortable</option>
+              <option value="compact">Compact</option>
+            </select>
+          </div>
         </Panel>
         <Panel title="Data">
-          <div className="setting-row"><span>Download CSV export</span><a className="btn" href="/api/export"><Download size={14} /> Export</a></div>
-          <div className="setting-row"><span>Create local backup</span><button className="btn" onClick={() => mutate(api.backup, "Backup created")}><Archive size={14} /> Backup</button></div>
+          <div className="setting-row">
+            <span>Download CSV export</span>
+            <a className="btn" href="/api/export"><Download size={14} /> Export</a>
+          </div>
+          <div className="setting-row">
+            <span>Create local backup</span>
+            <button className="btn" onClick={() => mutate(api.backup, "Backup created")}><Archive size={14} /> Backup</button>
+          </div>
         </Panel>
         <Panel title="Telegram commands">
           <div className="command-list">
-            {["/cards", "/info", "/fees", "/bonus", "/track", "/stats", "/backup", "/export"].map((cmd) => <code key={cmd}>{cmd}</code>)}
+            {["/cards", "/info", "/fees", "/bonus", "/track", "/stats", "/backup", "/export"].map((cmd) => (
+              <code key={cmd}>{cmd}</code>
+            ))}
           </div>
         </Panel>
       </section>
+
+      <DiagnosticsPanel data={diagData} />
     </div>
   );
 }
 
+/* ── Diagnostics panel ── */
+function DiagnosticsPanel({ data }) {
+  if (!data) return null;
+  const { counts, issues } = data;
+  return (
+    <Panel
+      title="Data health"
+      sub={`${counts.cards} cards checked · ${counts.issues} issue${counts.issues !== 1 ? "s" : ""} found`}
+    >
+      {issues.length === 0 ? (
+        <div className="diag-ok">
+          <Check size={15} /> All {counts.cards} cards look healthy.
+        </div>
+      ) : (
+        <>
+          <div className="diag-summary">
+            {counts.errors   > 0 && <span className="pill rose">{counts.errors} error{counts.errors !== 1 ? "s" : ""}</span>}
+            {counts.warnings > 0 && <span className="pill amber">{counts.warnings} warning{counts.warnings !== 1 ? "s" : ""}</span>}
+          </div>
+          {issues.map((issue, i) => (
+            <div key={i} className={`diag-issue ${issue.severity}`}>
+              <div className="diag-dot" />
+              <div>{issue.message}</div>
+            </div>
+          ))}
+        </>
+      )}
+    </Panel>
+  );
+}
+
+/* ── Card detail view ── */
 function Details({ selected, hideLast4, setSelectedId, setEditing, mutate }) {
   const progress = bonusProgress(selected);
   const [tab, setTab] = useState("overview");
+
   return (
     <div className="content">
       <PageHeader title={`${selected.bank} ${selected.name}`} sub={selected.status === "cancelled" ? "Cancelled card" : "Active card"}>
-        <button className="btn" onClick={() => setSelectedId(null)}>Back</button>
+        <button className="btn" onClick={() => setSelectedId(null)}>← Back</button>
         <button className="btn primary" onClick={() => setEditing(selected)}><Pencil size={14} /> Edit</button>
       </PageHeader>
+
       <section className="detail-grid">
         <Panel>
           <CardArt card={selected} large hideLast4={hideLast4} />
           <div className="detail-actions">
             {selected.status === "cancelled" ? (
-              <button className="btn" onClick={() => mutate(() => api.reactivateCard(selected.id), "Card reactivated")}>Reactivate</button>
+              <button className="btn" onClick={() => mutate(() => api.reactivateCard(selected.id), "Card reactivated")}>
+                <RefreshCcw size={14} /> Reactivate
+              </button>
             ) : (
-              <button className="btn danger" onClick={() => window.confirm("Cancel this card?") && mutate(() => api.cancelCard(selected.id), "Card cancelled")}>Cancel card</button>
+              <button className="btn danger" onClick={() => window.confirm("Cancel this card?") && mutate(() => api.cancelCard(selected.id), "Card cancelled")}>
+                <Archive size={14} /> Cancel card
+              </button>
             )}
-            <button className="btn danger" onClick={() => window.confirm("Permanently delete this card?") && mutate(() => api.deleteCard(selected.id), "Card deleted").then(() => setSelectedId(null))}>Delete</button>
+            <button
+              className="btn danger"
+              onClick={() => window.confirm("Permanently delete this card?") && mutate(() => api.deleteCard(selected.id), "Card deleted").then(() => setSelectedId(null))}
+            >
+              <Trash2 size={14} /> Delete
+            </button>
           </div>
         </Panel>
+
         <Panel title="Card workspace">
           <div className="tabs">
-            {["overview", "fee history", "welcome offer", "timeline"].map((item) => (
-              <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item}</button>
+            {["overview", "fee history", "welcome offer", "timeline"].map((t) => (
+              <button key={t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{t}</button>
             ))}
           </div>
-          {tab === "overview" && <dl className="details">
-            <dt>Annual fee</dt><dd>{fmtMoney(selected.annualFee)}</dd>
-            <dt>Fee month</dt><dd>{selected.feeMonth || "N/A"}</dd>
-            <dt>Expiry</dt><dd>{selected.expiry || "N/A"}</dd>
-            <dt>Last 4</dt><dd>{hideLast4 ? "••••" : selected.last4 || "N/A"}</dd>
-            <dt>Tags</dt><dd>{selected.tags.length ? selected.tags.join(", ") : "N/A"}</dd>
-            <dt>Notes</dt><dd>{selected.notes || "N/A"}</dd>
-          </dl>}
-          {tab === "fee history" && <dl className="details">
-            <dt>Waived</dt><dd>{selected.feeHistory?.waivedCount || 0} times</dd>
-            <dt>Paid</dt><dd>{selected.feeHistory?.paidCount || 0} times</dd>
-            <dt>Last action</dt><dd>{selected.feeHistory?.lastAction || "N/A"} {selected.feeHistory?.lastActionYear || ""}</dd>
-            <dt>Prompt</dt><dd>{daysUntilMonth(selected.feeMonth) <= 60 ? "Call for waiver or decide whether to keep." : "No immediate fee action."}</dd>
-          </dl>}
-          {tab === "welcome offer" && <div>
-            <div className="bonus-name">{selected.bonus?.offer || "No offer recorded"}</div>
-            <div className="progress"><span style={{ width: `${progress.percent}%` }} /></div>
-            <div className="bonus-meta">{fmtMoney(selected.bonus?.currentSpend)} / {fmtMoney(selected.bonus?.minSpend)} · {progress.days ?? "N/A"} days left</div>
-            <button className="btn small" onClick={() => {
-              const amount = Number(prompt("Add spend amount"));
-              if (amount > 0) mutate(() => api.addSpend(selected.id, amount), "Spend updated");
-            }}>Add spend</button>
-          </div>}
-          {tab === "timeline" && <dl className="details">
-            <dt>Applied</dt><dd>{fmtDate(selected.dates?.applied)}</dd>
-            <dt>Approved</dt><dd>{fmtDate(selected.dates?.approved)}</dd>
-            <dt>Received</dt><dd>{fmtDate(selected.dates?.received)}</dd>
-            <dt>Activated</dt><dd>{fmtDate(selected.dates?.activated)}</dd>
-            <dt>First charge</dt><dd>{fmtDate(selected.dates?.firstCharge)}</dd>
-            <dt>Cancelled</dt><dd>{fmtDate(selected.dates?.cancelled)}</dd>
-            <dt>Re-apply</dt><dd>{fmtDate(selected.dates?.reapply)}</dd>
-          </dl>}
+
+          {tab === "overview" && (
+            <dl className="details">
+              <dt>Annual fee</dt><dd>{fmtMoney(selected.annualFee)}</dd>
+              <dt>Fee month</dt><dd>{selected.feeMonth || "N/A"}</dd>
+              <dt>Expiry</dt>   <dd>{selected.expiry || "N/A"}</dd>
+              <dt>Last 4</dt>   <dd>{hideLast4 ? "••••" : selected.last4 || "N/A"}</dd>
+              <dt>Tags</dt>     <dd>{selected.tags.length ? selected.tags.join(", ") : "N/A"}</dd>
+              <dt>Notes</dt>    <dd>{selected.notes || "N/A"}</dd>
+            </dl>
+          )}
+
+          {tab === "fee history" && (
+            <dl className="details">
+              <dt>Waived</dt>      <dd>{selected.feeHistory?.waivedCount || 0} times</dd>
+              <dt>Paid</dt>        <dd>{selected.feeHistory?.paidCount   || 0} times</dd>
+              <dt>Last action</dt> <dd>{selected.feeHistory?.lastAction || "N/A"} {selected.feeHistory?.lastActionYear || ""}</dd>
+              <dt>Next step</dt>   <dd>{daysUntilMonth(selected.feeMonth) <= 60 ? "Call for waiver or decide whether to keep." : "No immediate fee action."}</dd>
+            </dl>
+          )}
+
+          {tab === "welcome offer" && (
+            <div>
+              <div className="bonus-name">{selected.bonus?.offer || "No offer recorded"}</div>
+              <div className="progress"><span style={{ width: `${progress.percent}%` }} /></div>
+              <div className="bonus-meta">
+                {fmtMoney(selected.bonus?.currentSpend)} / {fmtMoney(selected.bonus?.minSpend)} · {progress.days ?? "N/A"} days left
+              </div>
+              <button
+                className="btn small"
+                style={{ marginTop: 12 }}
+                onClick={() => {
+                  const amount = Number(prompt("Add spend amount"));
+                  if (amount > 0) mutate(() => api.addSpend(selected.id, amount), "Spend updated");
+                }}
+              >Add spend</button>
+            </div>
+          )}
+
+          {tab === "timeline" && (
+            <dl className="details">
+              <dt>Applied</dt>     <dd>{fmtDate(selected.dates?.applied)}</dd>
+              <dt>Approved</dt>    <dd>{fmtDate(selected.dates?.approved)}</dd>
+              <dt>Received</dt>    <dd>{fmtDate(selected.dates?.received)}</dd>
+              <dt>Activated</dt>   <dd>{fmtDate(selected.dates?.activated)}</dd>
+              <dt>First charge</dt><dd>{fmtDate(selected.dates?.firstCharge)}</dd>
+              <dt>Cancelled</dt>   <dd>{fmtDate(selected.dates?.cancelled)}</dd>
+              <dt>Re-apply</dt>    <dd>{fmtDate(selected.dates?.reapply)}</dd>
+            </dl>
+          )}
         </Panel>
       </section>
     </div>
   );
 }
 
+/* ── Card editor drawer ── */
 function CardEditor({ card, tags, onClose, onSave }) {
-  const [draft, setDraft] = useState(() => JSON.parse(JSON.stringify(card)));
+  const [draft, setDraft]     = useState(() => JSON.parse(JSON.stringify(card)));
   const [uploading, setUploading] = useState(false);
+
   const set = (path, value) => {
-    setDraft((current) => {
-      const next = { ...current, dates: { ...(current.dates || {}) }, bonus: { ...(current.bonus || {}) }, feeHistory: { ...(current.feeHistory || {}) } };
+    setDraft((cur) => {
+      const next = {
+        ...cur,
+        dates:      { ...(cur.dates      || {}) },
+        bonus:      { ...(cur.bonus      || {}) },
+        feeHistory: { ...(cur.feeHistory || {}) },
+      };
       if (path.includes(".")) {
         const [group, key] = path.split(".");
         next[group][key] = value;
@@ -644,53 +845,97 @@ function CardEditor({ card, tags, onClose, onSave }) {
   }
 
   return (
-    <div className="scrim">
+    <div className="scrim" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="drawer">
         <div className="drawer-head">
-          <div><h2>{draft.id ? "Edit card" : "Add card"}</h2><p>Organized sections keep the card record complete.</p></div>
-          <button className="icon-btn" onClick={onClose}>×</button>
+          <div>
+            <h2>{draft.id ? "Edit card" : "Add card"}</h2>
+            <p>Fill in as much detail as you have.</p>
+          </div>
+          <button className="icon-btn" onClick={onClose}>✕</button>
         </div>
+
         <div className="drawer-body">
           <FormSection number="01" title="Card identity">
-            <Input label="Bank" value={draft.bank} onChange={(value) => set("bank", value)} />
-            <Input label="Card name" value={draft.name} onChange={(value) => set("name", value)} />
-            <Input label="Last 4 digits" value={draft.last4} maxLength={4} onChange={(value) => set("last4", value.replace(/\D/g, ""))} />
-            <Input label="Expiry MM/YY" value={draft.expiry} placeholder="05/27" onChange={(value) => set("expiry", value)} />
-            <Input label="Annual fee" type="number" value={draft.annualFee} onChange={(value) => set("annualFee", Number(value))} />
+            <Input label="Bank"          value={draft.bank}   onChange={(v) => set("bank", v)} />
+            <Input label="Card name"     value={draft.name}   onChange={(v) => set("name", v)} />
+            <Input label="Last 4 digits" value={draft.last4}  maxLength={4} onChange={(v) => set("last4", v.replace(/\D/g, ""))} />
+            <Input label="Expiry MM/YY"  value={draft.expiry} placeholder="05/27" onChange={(v) => set("expiry", v)} />
+            <Input label="Annual fee"    value={draft.annualFee} type="number" onChange={(v) => set("annualFee", Number(v))} />
           </FormSection>
+
           <FormSection number="02" title="Card image">
             <div className="image-preview"><CardArt card={draft} large hideLast4={false} /></div>
-            <label className="field span"><span>Upload image</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => upload(event.target.files?.[0])} />{uploading && <small>Uploading...</small>}</label>
+            <label className="field span">
+              <span>Upload image</span>
+              <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => upload(e.target.files?.[0])} />
+              {uploading && <small>Uploading…</small>}
+            </label>
           </FormSection>
+
           <FormSection number="03" title="Tags and notes">
-            <label className="field span"><span>Tags</span><select multiple value={draft.tags || []} onChange={(event) => set("tags", [...event.target.selectedOptions].map((option) => option.value))}>{tags.map((tag) => <option key={tag}>{tag}</option>)}</select></label>
-            <label className="field span"><span>Notes</span><textarea value={draft.notes || ""} onChange={(event) => set("notes", event.target.value)} /></label>
+            <label className="field span">
+              <span>Tags</span>
+              <select multiple value={draft.tags || []} onChange={(e) => set("tags", [...e.target.selectedOptions].map((o) => o.value))}>
+                {tags.map((t) => <option key={t}>{t}</option>)}
+              </select>
+            </label>
+            <label className="field span">
+              <span>Notes</span>
+              <textarea value={draft.notes || ""} onChange={(e) => set("notes", e.target.value)} />
+            </label>
           </FormSection>
+
           <FormSection number="04" title="Welcome offer">
-            <Input label="Offer" value={draft.bonus?.offer} onChange={(value) => set("bonus.offer", value)} />
-            <Input label="Min spend" type="number" value={draft.bonus?.minSpend} onChange={(value) => set("bonus.minSpend", Number(value))} />
-            <Input label="Current spend" type="number" value={draft.bonus?.currentSpend} onChange={(value) => set("bonus.currentSpend", Number(value))} />
-            <Input label="Deadline" type="date" value={draft.bonus?.deadline || ""} onChange={(value) => set("bonus.deadline", value)} />
-            <label className="field"><span>Status</span><select value={draft.bonus?.status || "Not Started"} onChange={(event) => set("bonus.status", event.target.value)}>{["Not Started", "In Progress", "Met", "Received"].map((item) => <option key={item}>{item}</option>)}</select></label>
+            <Input label="Offer"         value={draft.bonus?.offer}        onChange={(v) => set("bonus.offer", v)} />
+            <Input label="Min spend"     value={draft.bonus?.minSpend}     type="number" onChange={(v) => set("bonus.minSpend",     Number(v))} />
+            <Input label="Current spend" value={draft.bonus?.currentSpend} type="number" onChange={(v) => set("bonus.currentSpend", Number(v))} />
+            <Input label="Deadline"      value={draft.bonus?.deadline || ""} type="date" onChange={(v) => set("bonus.deadline", v)} />
+            <label className="field">
+              <span>Status</span>
+              <select value={draft.bonus?.status || "Not Started"} onChange={(e) => set("bonus.status", e.target.value)}>
+                {["Not Started", "In Progress", "Met", "Received"].map((s) => <option key={s}>{s}</option>)}
+              </select>
+            </label>
           </FormSection>
+
           <FormSection number="05" title="Dates">
             {[
-              ["Applied", "dates.applied"],
-              ["Approved", "dates.approved"],
-              ["Received", "dates.received"],
-              ["Activated", "dates.activated"],
+              ["Applied",      "dates.applied"],
+              ["Approved",     "dates.approved"],
+              ["Received",     "dates.received"],
+              ["Activated",    "dates.activated"],
               ["First charge", "dates.firstCharge"],
-            ].map(([label, path]) => <Input key={path} label={label} type="date" value={path.split(".").reduce((obj, key) => obj?.[key], draft) || ""} onChange={(value) => set(path, value)} />)}
+            ].map(([label, path]) => (
+              <Input key={path} label={label} type="date"
+                value={path.split(".").reduce((o, k) => o?.[k], draft) || ""}
+                onChange={(v) => set(path, v)}
+              />
+            ))}
           </FormSection>
+
           <FormSection number="06" title="Fee and cancellation">
-            <label className="field"><span>Fee month</span><select value={draft.feeMonth || ""} onChange={(event) => set("feeMonth", event.target.value)}><option value="">N/A</option>{MONTHS.map((month) => <option key={month}>{month}</option>)}</select></label>
-            <Input label="Waived count" type="number" value={draft.feeHistory?.waivedCount || 0} onChange={(value) => set("feeHistory.waivedCount", Number(value))} />
-            <Input label="Paid count" type="number" value={draft.feeHistory?.paidCount || 0} onChange={(value) => set("feeHistory.paidCount", Number(value))} />
-            <Input label="Cancelled" type="date" value={draft.dates?.cancelled || ""} onChange={(value) => set("dates.cancelled", value)} />
-            <Input label="Re-apply" type="date" value={draft.dates?.reapply || ""} onChange={(value) => set("dates.reapply", value)} />
-            <label className="field"><span>Status</span><select value={draft.status || "active"} onChange={(event) => set("status", event.target.value)}><option value="active">Active</option><option value="cancelled">Cancelled</option></select></label>
+            <label className="field">
+              <span>Fee month</span>
+              <select value={draft.feeMonth || ""} onChange={(e) => set("feeMonth", e.target.value)}>
+                <option value="">N/A</option>
+                {MONTHS.map((m) => <option key={m}>{m}</option>)}
+              </select>
+            </label>
+            <Input label="Waived count" value={draft.feeHistory?.waivedCount || 0} type="number" onChange={(v) => set("feeHistory.waivedCount", Number(v))} />
+            <Input label="Paid count"   value={draft.feeHistory?.paidCount   || 0} type="number" onChange={(v) => set("feeHistory.paidCount",   Number(v))} />
+            <Input label="Cancelled"    value={draft.dates?.cancelled || ""} type="date" onChange={(v) => set("dates.cancelled", v)} />
+            <Input label="Re-apply"     value={draft.dates?.reapply   || ""} type="date" onChange={(v) => set("dates.reapply",   v)} />
+            <label className="field">
+              <span>Status</span>
+              <select value={draft.status || "active"} onChange={(e) => set("status", e.target.value)}>
+                <option value="active">Active</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </label>
           </FormSection>
         </div>
+
         <div className="drawer-foot">
           <button className="btn" onClick={onClose}>Cancel</button>
           <button className="btn primary" onClick={() => onSave(draft)}>Save card</button>
@@ -700,46 +945,78 @@ function CardEditor({ card, tags, onClose, onSave }) {
   );
 }
 
+/* ── Shared filter logic ── */
 function filterCards(cards, { query, showCancelled, bank, tag, sort }) {
   const q = query.trim().toLowerCase();
-  let result = cards.filter((card) => showCancelled || card.status !== "cancelled");
-  if (bank) result = result.filter((card) => card.bank === bank);
-  if (tag) result = result.filter((card) => card.tags.includes(tag));
-  if (q) result = result.filter((card) => [card.bank, card.name, card.notes, card.tags.join(" ")].join(" ").toLowerCase().includes(q));
-  if (sort === "due") result = [...result].sort((a, b) => daysUntilMonth(a.feeMonth) - daysUntilMonth(b.feeMonth));
+  let result = cards.filter((c) => showCancelled || c.status !== "cancelled");
+  if (bank) result = result.filter((c) => c.bank === bank);
+  if (tag)  result = result.filter((c) => c.tags.includes(tag));
+  if (q)    result = result.filter((c) => [c.bank, c.name, c.notes, c.tags.join(" ")].join(" ").toLowerCase().includes(q));
+  if (sort === "due")      result = [...result].sort((a, b) => daysUntilMonth(a.feeMonth) - daysUntilMonth(b.feeMonth));
   else if (sort === "fee-desc") result = [...result].sort((a, b) => b.annualFee - a.annualFee);
-  else if (sort === "fee-asc") result = [...result].sort((a, b) => a.annualFee - b.annualFee);
-  else if (sort === "bank") result = [...result].sort((a, b) => `${a.bank} ${a.name}`.localeCompare(`${b.bank} ${b.name}`));
+  else if (sort === "fee-asc")  result = [...result].sort((a, b) => a.annualFee - b.annualFee);
+  else if (sort === "bank")     result = [...result].sort((a, b) => `${a.bank} ${a.name}`.localeCompare(`${b.bank} ${b.name}`));
   else result = [...result].sort((a, b) => a.sortOrder - b.sortOrder);
   return result;
 }
 
+/* ── Shared UI primitives ── */
 function PageHeader({ title, sub, children }) {
-  return <div className="page-header"><div><h1>{title}</h1><p>{sub}</p></div><div className="actions">{children}</div></div>;
+  return (
+    <div className="page-header">
+      <div>
+        <h1 className="page-title">{title}</h1>
+        {sub && <p className="page-sub">{sub}</p>}
+      </div>
+      {children && <div className="page-actions">{children}</div>}
+    </div>
+  );
 }
 
 function Metric({ label, value, foot, urgent }) {
-  return <div className={`metric ${urgent ? "urgent" : ""}`}><span>{label}</span><strong>{value}</strong><small>{foot}</small></div>;
+  return (
+    <div className={`metric ${urgent ? "urgent" : ""}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{foot}</small>
+    </div>
+  );
 }
 
 function Panel({ title, sub, action, children, flush }) {
-  return <section className={`panel ${flush ? "flush" : ""}`}>{title && <header><div><h3>{title}</h3>{sub && <p>{sub}</p>}</div>{action}</header>}<div className="panel-body">{children}</div></section>;
+  return (
+    <section className={`panel ${flush ? "flush" : ""}`}>
+      {title && (
+        <header>
+          <div><h3>{title}</h3>{sub && <p>{sub}</p>}</div>
+          {action}
+        </header>
+      )}
+      <div className="panel-body">{children}</div>
+    </section>
+  );
 }
 
 function Empty({ children }) {
   return <div className="empty">{children}</div>;
 }
 
-function Select({ label, value, onChange, options }) {
-  return <label className="select-field"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option} value={option}>{option || "All"}</option>)}</select></label>;
-}
-
 function Input({ label, value, onChange, ...props }) {
-  return <label className="field"><span>{label}</span><input value={value ?? ""} onChange={(event) => onChange(event.target.value)} {...props} /></label>;
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <input value={value ?? ""} onChange={(e) => onChange(e.target.value)} {...props} />
+    </label>
+  );
 }
 
 function FormSection({ number, title, children }) {
-  return <section className="form-section"><h3><span>{number}</span>{title}</h3><div className="form-grid">{children}</div></section>;
+  return (
+    <section className="form-section">
+      <h3><span>{number}</span>{title}</h3>
+      <div className="form-grid">{children}</div>
+    </section>
+  );
 }
 
 function CardRow({ card, hideLast4, onOpen, compact, children }) {
@@ -749,7 +1026,9 @@ function CardRow({ card, hideLast4, onOpen, compact, children }) {
       <div className="card-main">
         <strong>{card.name}</strong>
         <span>{card.bank} · <code>{hideLast4 ? "••••" : card.last4 || "no last 4"}</code></span>
-        {!!card.tags.length && <div className="chips">{card.tags.map((tag) => <em key={tag}>{tag}</em>)}</div>}
+        {card.tags.length > 0 && (
+          <div className="chips">{card.tags.map((t) => <em key={t}>{t}</em>)}</div>
+        )}
       </div>
       {children}
     </div>
@@ -758,17 +1037,20 @@ function CardRow({ card, hideLast4, onOpen, compact, children }) {
 
 function CardArt({ card, large, hideLast4 }) {
   const [from, to] = bankColor(card.bank);
-  const hasImage = card.imageFilename && card.imageFilename !== "default.png";
+  const hasImage   = card.imageFilename && card.imageFilename !== "default.png";
   return (
-    <div className={`card-art ${large ? "large" : ""}`} style={{ background: `linear-gradient(135deg, ${from}, ${to})` }}>
+    <div
+      className={`card-art ${large ? "large" : ""}`}
+      style={{ background: `linear-gradient(135deg, ${from}, ${to})` }}
+    >
       {hasImage && <img src={imageUrl(card.imageFilename)} alt={`${card.bank} ${card.name}`} />}
-      {large ? (
+      {large && (
         <>
           <span>{card.bank}</span>
           <b>{hideLast4 ? "•••• •••• •••• ••••" : `•••• •••• •••• ${card.last4 || "0000"}`}</b>
           <strong>{card.name}</strong>
         </>
-      ) : null}
+      )}
     </div>
   );
 }
@@ -782,27 +1064,31 @@ function Status({ card }) {
 
 function RowActions({ card, setEditing, mutate }) {
   return (
-    <div className="row-actions" onClick={(event) => event.stopPropagation()}>
-      <button className="icon-btn" title="Edit" onClick={() => setEditing(card)}><Pencil size={15} /></button>
+    <div className="row-actions" onClick={(e) => e.stopPropagation()}>
+      <button className="icon-btn" title="Edit" onClick={() => setEditing(card)}><Pencil size={14} /></button>
       {card.status === "cancelled" ? (
-        <button className="icon-btn" title="Reactivate" onClick={() => mutate(() => api.reactivateCard(card.id), "Card reactivated")}><RefreshCcw size={15} /></button>
+        <button className="icon-btn" title="Reactivate" onClick={() => mutate(() => api.reactivateCard(card.id), "Card reactivated")}><RefreshCcw size={14} /></button>
       ) : (
-        <button className="icon-btn" title="Cancel" onClick={() => window.confirm("Cancel this card?") && mutate(() => api.cancelCard(card.id), "Card cancelled")}><Archive size={15} /></button>
+        <button className="icon-btn" title="Cancel" onClick={() => window.confirm("Cancel this card?") && mutate(() => api.cancelCard(card.id), "Card cancelled")}><Archive size={14} /></button>
       )}
-      <button className="icon-btn danger" title="Delete" onClick={() => window.confirm("Permanently delete this card?") && mutate(() => api.deleteCard(card.id), "Card deleted")}><Trash2 size={15} /></button>
+      <button className="icon-btn danger" title="Delete" onClick={() => window.confirm("Permanently delete?") && mutate(() => api.deleteCard(card.id), "Card deleted")}><Trash2 size={14} /></button>
     </div>
   );
 }
 
 function BonusRow({ card, onOpen, children }) {
   const progress = bonusProgress(card);
-  const tone = progress.days !== null && progress.days <= 30 ? "rose" : progress.days !== null && progress.days <= 90 ? "amber" : "teal";
+  const tone     = (progress.days ?? 999) <= 30 ? "rose" : (progress.days ?? 999) <= 90 ? "amber" : "teal";
   return (
     <div className="bonus-row" onClick={onOpen}>
       <CardArt card={card} />
       <div>
         <strong>{card.name}<span>{card.bonus?.offer ? ` · ${card.bonus.offer}` : ""}</span></strong>
-        <div className="bonus-meta"><span className={`pill ${tone}`}>{progress.days ?? "N/A"}d</span><span>{fmtMoney(card.bonus?.currentSpend)} / {fmtMoney(card.bonus?.minSpend)}</span><span>{fmtMoney(progress.remaining)} left</span></div>
+        <div className="bonus-meta">
+          <span className={`pill ${tone}`}>{progress.days ?? "N/A"}d</span>
+          <span>{fmtMoney(card.bonus?.currentSpend)} / {fmtMoney(card.bonus?.minSpend)}</span>
+          <span>{fmtMoney(progress.remaining)} left</span>
+        </div>
         <div className="progress"><span style={{ width: `${progress.percent}%` }} /></div>
       </div>
       {children}
