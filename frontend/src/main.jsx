@@ -69,6 +69,8 @@ function App() {
   const [toast, setToast]         = useState("");
   const [diagData, setDiagData]   = useState(null);
   const [botStatus, setBotStatus] = useState(null);
+  const [sortDraft, setSortDraft] = useState(null);
+  const [sortDirty, setSortDirty] = useState(false);
 
   async function refresh() {
     const [nextCards, nextTags, nextDiag] = await Promise.all([
@@ -124,8 +126,47 @@ function App() {
     return { active, cancelled, urgentFees, bonuses };
   }, [cards]);
 
-  function navigate(p) { setSelectedId(null); setPage(p); }
+  async function saveSortDraft() {
+    if (!sortDraft) return true;
+    try {
+      const next = await api.sortOrder(sortDraft);
+      setCards(next);
+      setSortDirty(false);
+      setSortDraft(null);
+      setToast("Sort order saved");
+      return true;
+    } catch (err) {
+      setToast(err.message);
+      return false;
+    }
+  }
+
+  async function navigate(p) {
+    if (page === "sort" && p !== "sort" && sortDirty) {
+      const shouldSave = window.confirm("Save sort order changes before leaving?");
+      if (shouldSave) {
+        const saved = await saveSortDraft();
+        if (!saved) return;
+      } else {
+        setSortDirty(false);
+        setSortDraft(null);
+      }
+    }
+    setSelectedId(null);
+    setPage(p);
+  }
+
   function openCard(id) { setSelectedId(id); setPage("details"); }
+
+  useEffect(() => {
+    if (!sortDirty) return;
+    const warn = (event) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [sortDirty]);
 
   return (
     <div className="app">
@@ -211,9 +252,14 @@ function App() {
             density={density}
             diagData={diagData}
             botStatus={botStatus}
+            sortDraft={sortDraft}
+            sortDirty={sortDirty}
             setTheme={setTheme}
             setDensity={setDensity}
             setHideLast4={setHideLast4}
+            setSortDraft={setSortDraft}
+            setSortDirty={setSortDirty}
+            saveSortDraft={saveSortDraft}
             selected={selected}
             setPage={navigate}
             setSelectedId={openCard}
@@ -578,55 +624,89 @@ function tagTone(tag) {
 }
 
 /* ── Sort page ── */
-function SortPage({ cards, hideLast4, setSelectedId, mutate }) {
+function SortPage({ cards, hideLast4, setSelectedId, sortDraft, sortDirty, setSortDraft, setSortDirty, saveSortDraft }) {
   const active = cards.filter((c) => c.status === "active").sort((a, b) => a.sortOrder - b.sortOrder);
-  const [orders, setOrders] = useState(() =>
-    Object.fromEntries(active.map((c, i) => [c.id, c.sortOrder || i + 1]))
+  const [dragId, setDragId] = useState(null);
+  const [overId, setOverId] = useState(null);
+  const baseOrders = useMemo(
+    () => Object.fromEntries(active.map((c, i) => [c.id, c.sortOrder || i + 1])),
+    [cards]
   );
+  const orders = sortDraft || baseOrders;
+  const orderedActive = [...active].sort((a, b) => Number(orders[a.id] || 99) - Number(orders[b.id] || 99));
 
   useEffect(() => {
-    setOrders(Object.fromEntries(active.map((c, i) => [c.id, c.sortOrder || i + 1])));
-  }, [cards.length]);
+    if (!sortDirty) setSortDraft(baseOrders);
+  }, [baseOrders, sortDirty, setSortDraft]);
 
   const values     = Object.values(orders).map(Number).filter(Boolean);
   const duplicates = values.filter((v, i) => values.indexOf(v) !== i);
 
+  function updateOrders(nextOrders) {
+    setSortDraft(nextOrders);
+    setSortDirty(true);
+  }
+
   function renumber() {
-    setOrders(Object.fromEntries(active.map((c, i) => [c.id, i + 1])));
+    updateOrders(Object.fromEntries(orderedActive.map((c, i) => [c.id, i + 1])));
   }
 
   function bump(id, delta) {
-    const sorted = active
-      .map((c) => ({ id: c.id, order: Number(orders[c.id] || c.sortOrder || 99) }))
-      .sort((a, b) => a.order - b.order);
-    const idx = sorted.findIndex((x) => x.id === id);
+    const sorted = orderedActive.map((c) => c.id);
+    const idx = sorted.indexOf(id);
     const swap = idx + delta;
     if (swap < 0 || swap >= sorted.length) return;
     [sorted[idx], sorted[swap]] = [sorted[swap], sorted[idx]];
-    setOrders(Object.fromEntries(sorted.map((x, i) => [x.id, i + 1])));
+    updateOrders(Object.fromEntries(sorted.map((cardId, i) => [cardId, i + 1])));
+  }
+
+  function dropOn(targetId) {
+    if (!dragId || dragId === targetId) {
+      setDragId(null);
+      setOverId(null);
+      return;
+    }
+    const sorted = orderedActive.map((c) => c.id).filter((id) => id !== dragId);
+    const targetIndex = sorted.indexOf(targetId);
+    sorted.splice(targetIndex, 0, dragId);
+    updateOrders(Object.fromEntries(sorted.map((cardId, i) => [cardId, i + 1])));
+    setDragId(null);
+    setOverId(null);
   }
 
   return (
     <div className="content">
       <PageHeader title="Sort order" sub="Manual order for card list and bot responses">
         {duplicates.length > 0 && <span className="pill rose">Duplicate order values</span>}
+        {sortDirty && <span className="pill amber">Unsaved changes</span>}
         <button className="btn" onClick={renumber}><ListOrdered size={14} /> Renumber</button>
-        <button className="btn primary" onClick={() => mutate(() => api.sortOrder(orders), "Sort order saved")}>Save order</button>
+        <button className="btn primary" disabled={!sortDirty || duplicates.length > 0} onClick={saveSortDraft}>Save order</button>
       </PageHeader>
-      <Panel title="Active cards" sub="Use arrows or type an order number">
-        {active.map((card, i) => (
-          <div className="sort-row" key={card.id}>
-            <GripVertical size={15} />
+      <Panel title="Active cards" sub="Drag rows, use arrows, or type an order number">
+        {orderedActive.map((card, i) => (
+          <div
+            className={`sort-row ${dragId === card.id ? "dragging" : ""} ${overId === card.id ? "over" : ""}`}
+            key={card.id}
+            draggable
+            onDragStart={() => setDragId(card.id)}
+            onDragOver={(e) => { e.preventDefault(); setOverId(card.id); }}
+            onDragLeave={() => setOverId(null)}
+            onDrop={() => dropOn(card.id)}
+            onDragEnd={() => { setDragId(null); setOverId(null); }}
+          >
+            <button className="sort-handle" title="Drag to reorder" aria-label={`Drag ${card.name}`}>
+              <GripVertical size={15} />
+            </button>
             <CardRow card={card} hideLast4={hideLast4} compact onOpen={() => setSelectedId(card.id)}>
               <button className="btn small" disabled={i === 0}              onClick={(e) => { e.stopPropagation(); bump(card.id, -1); }}>↑</button>
-              <button className="btn small" disabled={i === active.length - 1} onClick={(e) => { e.stopPropagation(); bump(card.id,  1); }}>↓</button>
+              <button className="btn small" disabled={i === orderedActive.length - 1} onClick={(e) => { e.stopPropagation(); bump(card.id,  1); }}>↓</button>
             </CardRow>
             <input
               className={`order-input ${duplicates.includes(Number(orders[card.id])) ? "duplicate" : ""}`}
               type="number"
               min="1"
               value={orders[card.id] || ""}
-              onChange={(e) => setOrders({ ...orders, [card.id]: Number(e.target.value) })}
+              onChange={(e) => updateOrders({ ...orders, [card.id]: Number(e.target.value) })}
             />
           </div>
         ))}
@@ -665,35 +745,54 @@ function NotificationsPage({ cards, hideLast4, setSelectedId, botStatus, mutate 
         </button>
       </PageHeader>
       <section className="grid two">
-        <Panel
-          title="Activity feed"
-          action={
-            <div className="feed-filters">
-              {["all", "fee", "bonus", "reapply"].map((item) => (
-                <button key={item} className={feedFilter === item ? "active" : ""} onClick={() => setFeedFilter(item)}>
-                  {item === "all" ? "All" : item[0].toUpperCase() + item.slice(1)}
-                </button>
+        <div className="notification-main">
+          <Panel
+            title="Activity feed"
+            action={
+              <div className="feed-filters">
+                {["all", "fee", "bonus", "reapply"].map((item) => (
+                  <button key={item} className={feedFilter === item ? "active" : ""} onClick={() => setFeedFilter(item)}>
+                    {item === "all" ? "All" : item[0].toUpperCase() + item.slice(1)}
+                  </button>
+                ))}
+              </div>
+            }
+          >
+            <div className="activity-list">
+              {filteredActivity.map((item) => (
+                <div className={`activity-row ${item.read ? "" : "unread"}`} key={item.id}>
+                  <CardArt card={item.card} />
+                  <div>
+                    <div className="activity-meta">
+                      <span className={`pill ${item.tone}`}>{item.label}</span>
+                      {!item.read && <span className="unread-dot" />}
+                      <span className="mono">{item.when}</span>
+                    </div>
+                    <div className="activity-message">{item.message}</div>
+                  </div>
+                  {item.read ? <Eye size={14} /> : <Check size={14} />}
+                </div>
               ))}
             </div>
-          }
-        >
-          <div className="activity-list">
-            {filteredActivity.map((item) => (
-              <div className={`activity-row ${item.read ? "" : "unread"}`} key={item.id}>
-                <CardArt card={item.card} />
-                <div>
-                  <div className="activity-meta">
-                    <span className={`pill ${item.tone}`}>{item.label}</span>
-                    {!item.read && <span className="unread-dot" />}
-                    <span className="mono">{item.when}</span>
-                  </div>
-                  <div className="activity-message">{item.message}</div>
-                </div>
-                {item.read ? <Eye size={14} /> : <Check size={14} />}
-              </div>
-            ))}
-          </div>
-        </Panel>
+          </Panel>
+
+          <Panel title="Upcoming notification queue" sub={`${events.length} reminders from real card data`}>
+            <div className="queue-list">
+              {events.length
+                ? events.map((event) => (
+                    <button key={`${event.type}-${event.card.id}`} className="queue-row" onClick={() => setSelectedId(event.card.id)}>
+                      <CardArt card={event.card} />
+                      <div>
+                        <strong>{event.card.name}</strong>
+                        <span>{event.type} · {event.detail}</span>
+                      </div>
+                      <span className={`pill ${event.tone}`}>{event.days}d</span>
+                    </button>
+                  ))
+                : <Empty>No notifications due in the next 60 days.</Empty>}
+            </div>
+          </Panel>
+        </div>
 
         <div className="notification-side">
           <Panel
@@ -741,23 +840,6 @@ function NotificationsPage({ cards, hideLast4, setSelectedId, botStatus, mutate 
             </div>
           </Panel>
         </div>
-
-        <Panel title="Upcoming notification queue" sub={`${events.length} reminders from real card data`}>
-          <div className="queue-list">
-            {events.length
-              ? events.map((event) => (
-                  <button key={`${event.type}-${event.card.id}`} className="queue-row" onClick={() => setSelectedId(event.card.id)}>
-                    <CardArt card={event.card} />
-                    <div>
-                      <strong>{event.card.name}</strong>
-                      <span>{event.type} · {event.detail}</span>
-                    </div>
-                    <span className={`pill ${event.tone}`}>{event.days}d</span>
-                  </button>
-                ))
-              : <Empty>No notifications due in the next 60 days.</Empty>}
-          </div>
-        </Panel>
       </section>
     </div>
   );
