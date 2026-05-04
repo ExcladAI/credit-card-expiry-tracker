@@ -43,6 +43,8 @@ export const api = {
   diagnostics: () => request("/api/diagnostics"),
   botStatus: () => request("/api/bot/status"),
   testBot: () => request("/api/bot/test", { method: "POST" }),
+  notificationSettings: () => request("/api/notification-settings"),
+  saveNotificationSettings: (settings) => request("/api/notification-settings", { method: "PUT", body: JSON.stringify(settings) }),
 };
 
 export function imageUrl(filename) {

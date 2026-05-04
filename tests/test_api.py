@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 import api
 import data_store
+import notification_settings
 
 
 def configure_paths(tmp_path, monkeypatch):
@@ -9,6 +10,7 @@ def configure_paths(tmp_path, monkeypatch):
     tags_file = tmp_path / "tags.json"
     image_dir = tmp_path / "images"
     backup_dir = tmp_path / "backups"
+    settings_file = tmp_path / "notification_settings.json"
 
     for module in (data_store, api):
         monkeypatch.setattr(module, "DATA_FILE", str(data_file))
@@ -16,6 +18,7 @@ def configure_paths(tmp_path, monkeypatch):
         monkeypatch.setattr(module, "IMAGE_DIR", str(image_dir))
         monkeypatch.setattr(module, "BACKUP_DIR", str(backup_dir))
     monkeypatch.setattr(data_store, "LOCK_FILE", str(data_file) + ".lock")
+    monkeypatch.setattr(notification_settings, "SETTINGS_FILE", str(settings_file))
 
 
 def test_create_update_and_delete_card(tmp_path, monkeypatch):
@@ -132,13 +135,53 @@ def test_bot_status_reports_unconfigured(monkeypatch):
     assert response.json()["connected"] is False
 
 
-def test_bot_test_sends_message(monkeypatch):
+def test_bot_test_sends_message(tmp_path, monkeypatch):
+    configure_paths(tmp_path, monkeypatch)
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "123456")
-    monkeypatch.setattr(api, "telegram_request", lambda method, payload=None: {"message_id": 99})
+    sent = {}
+    def fake_telegram_request(method, payload=None):
+        sent["payload"] = payload
+        return {"message_id": 99}
+    monkeypatch.setattr(api, "telegram_request", fake_telegram_request)
     client = TestClient(api.app)
 
     response = client.post("/api/bot/test")
 
     assert response.status_code == 200
     assert response.json() == {"ok": True, "messageId": 99}
+    assert "SGT" in sent["payload"]["text"] or "+08" in sent["payload"]["text"]
+
+
+def test_notification_settings_round_trip(tmp_path, monkeypatch):
+    configure_paths(tmp_path, monkeypatch)
+    client = TestClient(api.app)
+
+    payload = {
+        "timezone": "Asia/Tokyo",
+        "digestTime": "08:30",
+        "rules": {
+            "feesDue30": False,
+            "bonusesDue30": True,
+            "reapplyEligible": False,
+            "cardExpiry60": True,
+            "bonusProgressWeekly": True,
+        },
+    }
+    updated = client.put("/api/notification-settings", json=payload)
+    fetched = client.get("/api/notification-settings")
+
+    assert updated.status_code == 200
+    assert updated.json()["timezone"] == "Asia/Tokyo"
+    assert updated.json()["digestTime"] == "08:30"
+    assert updated.json()["rules"]["feesDue30"] is False
+    assert fetched.json() == updated.json()
+
+
+def test_notification_settings_reject_bad_timezone(tmp_path, monkeypatch):
+    configure_paths(tmp_path, monkeypatch)
+    client = TestClient(api.app)
+
+    response = client.put("/api/notification-settings", json={"timezone": "Mars/Base", "digestTime": "10:00"})
+
+    assert response.status_code == 400

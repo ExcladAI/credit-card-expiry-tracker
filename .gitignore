@@ -1,6 +1,7 @@
 # Personal data file - DO NOT COMMIT
 my_cards.csv
 my_tags.json
+notification_settings.json
 *.lock
 
 # Python cache files

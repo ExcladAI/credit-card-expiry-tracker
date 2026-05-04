@@ -44,6 +44,7 @@ TAGS_FILE=my_tags.json
 IMAGE_DIR=card_images
 RUN_BOT=auto
 RUN_BOT_REQUIRED=false
+NOTIFICATION_SETTINGS_FILE=notification_settings.json
 ```
 
 `RUN_BOT=auto` starts the Telegram bot only when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are present. Set `RUN_BOT=false` for a web-dashboard-only deployment. By default, `RUN_BOT_REQUIRED=false` keeps the web dashboard running even if the bot exits, which can happen when another deployment is already polling the same Telegram bot token.
@@ -119,6 +120,7 @@ On your NAS, create a directory (e.g., `/docker/credit-card-tracker`) and upload
   * `my_cards.csv` (can be an empty file initially)
   * `my_tags.json`
   * `.env`
+  * `notification_settings.json` (use `{}` initially if you want to bind-mount the file)
   * Folder: `card_images/`
   * Folder: `backups/`
 
@@ -158,6 +160,7 @@ services:
       APP_PORT: 8502
       RUN_BOT: "auto"
       RUN_BOT_REQUIRED: "false"
+      NOTIFICATION_SETTINGS_FILE: notification_settings.json
     
     # Resource Limits (Optional but recommended for NAS)
     deploy:
@@ -172,6 +175,7 @@ services:
     volumes:
       - /path/to/nas/my_cards.csv:/app/my_cards.csv
       - /path/to/nas/my_tags.json:/app/my_tags.json
+      - /path/to/nas/notification_settings.json:/app/notification_settings.json
       - /path/to/nas/card_images:/app/card_images
       - /path/to/nas/backups:/app/backups
       - /path/to/nas/.env:/app/.env

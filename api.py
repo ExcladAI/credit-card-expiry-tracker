@@ -25,6 +25,11 @@ from data_store import (
     new_card_id,
     update_data,
 )
+from notification_settings import (
+    load_notification_settings,
+    notification_timezone,
+    save_notification_settings,
+)
 
 app = FastAPI(title="Credit Card Tracker API")
 
@@ -253,6 +258,7 @@ def bot_status():
         "chatId": masked_chat_id(chat_id),
         "runBot": os.getenv("RUN_BOT", "auto"),
         "botRequired": os.getenv("RUN_BOT_REQUIRED", "false"),
+        "settings": load_notification_settings(),
     }
     if not configured:
         return status
@@ -272,9 +278,24 @@ def test_bot_connection():
     _, chat_id = telegram_config()
     if not chat_id:
         raise HTTPException(status_code=400, detail="Telegram chat ID is not configured")
-    text = f"Credit Card Tracker test message sent at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}."
+    settings = load_notification_settings()
+    now = datetime.now(notification_timezone(settings["timezone"]))
+    text = f"Credit Card Tracker test message sent at {now.strftime('%Y-%m-%d %H:%M:%S %Z')}."
     result = telegram_request("sendMessage", {"chat_id": chat_id, "text": text})
     return {"ok": True, "messageId": result.get("message_id")}
+
+
+@app.get("/api/notification-settings")
+def get_notification_settings():
+    return load_notification_settings()
+
+
+@app.put("/api/notification-settings")
+def update_notification_settings(payload: dict):
+    try:
+        return save_notification_settings(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/cards")

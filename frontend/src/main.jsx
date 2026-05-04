@@ -71,16 +71,19 @@ function App() {
   const [botStatus, setBotStatus] = useState(null);
   const [sortDraft, setSortDraft] = useState(null);
   const [sortDirty, setSortDirty] = useState(false);
+  const [notificationSettings, setNotificationSettings] = useState(null);
 
   async function refresh() {
-    const [nextCards, nextTags, nextDiag] = await Promise.all([
+    const [nextCards, nextTags, nextDiag, nextNotificationSettings] = await Promise.all([
       api.cards(),
       api.tags(),
       api.diagnostics().catch(() => null),
+      api.notificationSettings().catch(() => null),
     ]);
     setCards(nextCards);
     setTags(nextTags);
     setDiagData(nextDiag);
+    setNotificationSettings(nextNotificationSettings);
     setLoading(false);
     api.botStatus().then(setBotStatus).catch(() => setBotStatus(null));
   }
@@ -138,6 +141,17 @@ function App() {
     } catch (err) {
       setToast(err.message);
       return false;
+    }
+  }
+
+  async function saveNotificationSettings(nextSettings) {
+    try {
+      const saved = await api.saveNotificationSettings(nextSettings);
+      setNotificationSettings(saved);
+      setBotStatus((current) => current ? { ...current, settings: saved } : current);
+      setToast("Notification settings saved");
+    } catch (err) {
+      setToast(err.message);
     }
   }
 
@@ -252,6 +266,7 @@ function App() {
             density={density}
             diagData={diagData}
             botStatus={botStatus}
+            notificationSettings={notificationSettings}
             sortDraft={sortDraft}
             sortDirty={sortDirty}
             setTheme={setTheme}
@@ -260,6 +275,7 @@ function App() {
             setSortDraft={setSortDraft}
             setSortDirty={setSortDirty}
             saveSortDraft={saveSortDraft}
+            saveNotificationSettings={saveNotificationSettings}
             selected={selected}
             setPage={navigate}
             setSelectedId={openCard}
@@ -716,8 +732,41 @@ function SortPage({ cards, hideLast4, setSelectedId, sortDraft, sortDirty, setSo
 }
 
 /* ── Notifications page ── */
-function NotificationsPage({ cards, hideLast4, setSelectedId, botStatus, mutate }) {
+const timezoneOptions = [
+  "Asia/Singapore",
+  "Asia/Kuala_Lumpur",
+  "Asia/Hong_Kong",
+  "Asia/Tokyo",
+  "Australia/Sydney",
+  "Europe/London",
+  "America/New_York",
+  "America/Los_Angeles",
+  "UTC",
+];
+
+const reminderRules = [
+  ["feesDue30", "Fees due ≤30 days"],
+  ["bonusesDue30", "Bonuses ≤30 days"],
+  ["reapplyEligible", "Re-apply eligible"],
+  ["cardExpiry60", "Card expiry ≤60 days"],
+  ["bonusProgressWeekly", "Bonus progress summary"],
+];
+
+const defaultNotificationSettings = {
+  timezone: "Asia/Singapore",
+  digestTime: "10:00",
+  rules: {
+    feesDue30: true,
+    bonusesDue30: true,
+    reapplyEligible: true,
+    cardExpiry60: false,
+    bonusProgressWeekly: false,
+  },
+};
+
+function NotificationsPage({ cards, hideLast4, setSelectedId, botStatus, notificationSettings, saveNotificationSettings, mutate }) {
   const [feedFilter, setFeedFilter] = useState("all");
+  const settings = notificationSettings || botStatus?.settings || defaultNotificationSettings;
   const active = cards.filter((c) => c.status === "active");
   const events = [
     ...active
@@ -812,16 +861,34 @@ function NotificationsPage({ cards, hideLast4, setSelectedId, botStatus, mutate 
           </Panel>
 
           <Panel title="Daily digest">
-            {[
-              ["Fees due ≤30 days", true],
-              ["Bonuses ≤30 days", true],
-              ["Re-apply eligible", true],
-              ["Card expiry ≤60 days", false],
-              ["Bonus progress weekly", false],
-            ].map(([label, on]) => (
-              <div className="digest-row" key={label}>
+            <div className="setting-row compact">
+              <span>Timezone</span>
+              <select
+                value={settings.timezone}
+                onChange={(e) => saveNotificationSettings({ ...settings, timezone: e.target.value })}
+              >
+                {timezoneOptions.map((zone) => <option key={zone}>{zone}</option>)}
+              </select>
+            </div>
+            <div className="setting-row compact">
+              <span>Notify at</span>
+              <input
+                className="time-input"
+                type="time"
+                value={settings.digestTime}
+                onChange={(e) => saveNotificationSettings({ ...settings, digestTime: e.target.value })}
+              />
+            </div>
+            {reminderRules.map(([key, label]) => (
+              <div className="digest-row" key={key}>
                 <span>{label}</span>
-                <Toggle checked={on} onChange={() => {}} />
+                <Toggle
+                  checked={!!settings.rules?.[key]}
+                  onChange={(value) => saveNotificationSettings({
+                    ...settings,
+                    rules: { ...(settings.rules || {}), [key]: value },
+                  })}
+                />
               </div>
             ))}
           </Panel>

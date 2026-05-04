@@ -24,6 +24,7 @@ from data_store import (
     load_data,
     update_data,
 )
+from notification_settings import load_notification_settings, notification_timezone, parse_digest_time
 
 # --- Configuration & Setup ---
 load_dotenv()
@@ -44,6 +45,21 @@ def now_sgt():
 
 def today_sgt_naive():
     return pd.Timestamp.now(tz=SGT).tz_localize(None)
+
+
+def today_notification_naive(settings=None):
+    settings = settings or load_notification_settings()
+    return pd.Timestamp.now(tz=notification_timezone(settings["timezone"])).tz_localize(None)
+
+
+def days_until_fee_month(month_name, today):
+    if month_name not in MONTH_NAMES:
+        return 9999
+    due_month = MONTH_NAMES.index(month_name) + 1
+    due = pd.Timestamp(year=today.year, month=due_month, day=14)
+    if due < today.normalize():
+        due = pd.Timestamp(year=today.year + 1, month=due_month, day=14)
+    return int((due - today.normalize()).days)
 
 
 def card_title(row):
@@ -382,21 +398,26 @@ async def card_info_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def send_weekly_notifications(context: ContextTypes.DEFAULT_TYPE):
     """Scheduled job: Checks for Unpaid Fees AND Expiring Bonuses."""
+    settings = load_notification_settings()
+    rules = settings["rules"]
     df = load_data()
     active_cards = df[pd.isna(df['Cancellation Date'])]
 
-    today = today_sgt_naive()
+    today = today_notification_naive(settings)
     current_month_name = MONTH_NAMES[today.month - 1]
     current_year = today.year
 
     # 1. FEE CHECKS
-    due_cards = active_cards[
-        (active_cards["Month of Annual Fee"] == current_month_name) &
-        (active_cards["LastFeeActionYear"] != current_year)
-    ]
+    if rules.get("feesDue30"):
+        due_cards = active_cards[
+            (active_cards["Month of Annual Fee"].apply(lambda month: days_until_fee_month(month, today)) <= 30) &
+            (active_cards["LastFeeActionYear"] != current_year)
+        ]
+    else:
+        due_cards = pd.DataFrame()
 
     if not due_cards.empty:
-        await context.bot.send_message(chat_id=YOUR_CHAT_ID, text=f"🔔 *Weekly Fee Reminder ({current_month_name})*", parse_mode='Markdown')
+        await context.bot.send_message(chat_id=YOUR_CHAT_ID, text=f"🔔 *Fee Reminder ({current_month_name})*", parse_mode='Markdown')
         for idx, row in due_cards.iterrows():
             card_name = md(card_title(row))
             fee = row['Annual Fee']
@@ -413,7 +434,7 @@ async def send_weekly_notifications(context: ContextTypes.DEFAULT_TYPE):
         (pd.notna(active_cards['Min Spend Deadline']))
     ].copy()
 
-    if not bonus_cards.empty:
+    if rules.get("bonusesDue30") and not bonus_cards.empty:
         for idx, row in bonus_cards.iterrows():
             deadline = pd.to_datetime(row['Min Spend Deadline'])
             days_left = (deadline - today).days
@@ -434,6 +455,55 @@ async def send_weekly_notifications(context: ContextTypes.DEFAULT_TYPE):
                 )
                 keyboard = [[InlineKeyboardButton("💵 Add Spend", callback_data=f"track:{row['Card ID']}")]]
                 await context.bot.send_message(chat_id=YOUR_CHAT_ID, text=msg, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+    if rules.get("reapplyEligible"):
+        reapply_cards = df[
+            (pd.notna(df["Cancellation Date"])) &
+            (pd.notna(df["Re-apply Date"])) &
+            (pd.to_datetime(df["Re-apply Date"]) <= today)
+        ]
+        if not reapply_cards.empty:
+            lines = ["♻️ *Cards eligible to re-apply*"]
+            for _, row in reapply_cards.iterrows():
+                lines.append(f"- {md(card_title(row))}")
+            await context.bot.send_message(chat_id=YOUR_CHAT_ID, text="\n".join(lines), parse_mode='Markdown')
+
+    if rules.get("cardExpiry60"):
+        expiring = []
+        for _, row in active_cards.iterrows():
+            expiry = pd.to_datetime(f"01/{row['Card Expiry (MM/YY)']}", format="%d/%m/%y", errors="coerce")
+            if pd.notna(expiry):
+                expiry = expiry + pd.offsets.MonthEnd(0)
+                days_left = (expiry - today).days
+                if 0 <= days_left <= 60:
+                    expiring.append((row, days_left))
+        if expiring:
+            lines = ["💳 *Cards expiring soon*"]
+            for row, days_left in expiring:
+                lines.append(f"- {md(card_title(row))}: {days_left} days")
+            await context.bot.send_message(chat_id=YOUR_CHAT_ID, text="\n".join(lines), parse_mode='Markdown')
+
+    if rules.get("bonusProgressWeekly"):
+        progress_cards = bonus_cards[bonus_cards["Bonus Status"].isin(["In Progress", "Not Started"])]
+        if not progress_cards.empty:
+            lines = ["📊 *Bonus progress*"]
+            for _, row in progress_cards.iterrows():
+                remaining = max(0, row["Min Spend"] - row["Current Spend"])
+                lines.append(f"- {md(card_title(row))}: ${remaining:,.2f} remaining")
+            await context.bot.send_message(chat_id=YOUR_CHAT_ID, text="\n".join(lines), parse_mode='Markdown')
+
+
+async def notification_scheduler_tick(context: ContextTypes.DEFAULT_TYPE):
+    settings = load_notification_settings()
+    hour, minute = parse_digest_time(settings["digestTime"])
+    now = datetime.now(notification_timezone(settings["timezone"]))
+    today_key = now.strftime("%Y-%m-%d")
+    if now.hour != hour or now.minute != minute:
+        return
+    if context.application.bot_data.get("last_digest_date") == today_key:
+        return
+    context.application.bot_data["last_digest_date"] = today_key
+    await send_weekly_notifications(context)
 
 # --- BUTTON HANDLER ---
 @restricted
@@ -698,19 +768,12 @@ if __name__ == '__main__':
 
     # Jobs
     job_queue = application.job_queue
-    
-    # FIXED SUNDAY SCHEDULE WITH TIMEZONE
-    # Runs every Sunday at 10:00 AM Singapore Time. 
-    # days=(6,) means Sunday (0=Mon, 1=Tue... 6=Sun)
-    job_queue.run_daily(
-        send_weekly_notifications, 
-        time=time(hour=10, minute=0, second=0, tzinfo=SGT), 
-        days=(6,), 
-        chat_id=YOUR_CHAT_ID
-    )
+    settings = load_notification_settings()
+    tzinfo = notification_timezone(settings["timezone"])
 
-    # Daily backup at 4 AM Singapore Time
-    job_queue.run_daily(automated_backup, time=time(hour=4, minute=0, second=0, tzinfo=SGT))
+    job_queue.run_repeating(notification_scheduler_tick, interval=30, first=5, chat_id=YOUR_CHAT_ID)
+
+    job_queue.run_daily(automated_backup, time=time(hour=4, minute=0, second=0, tzinfo=tzinfo))
 
     print("Bot is running... (Logs silenced)")
     application.run_polling()
