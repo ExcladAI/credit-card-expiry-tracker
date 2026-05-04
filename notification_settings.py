@@ -1,6 +1,5 @@
 import json
 import os
-import shutil
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -34,8 +33,19 @@ def normalize_settings(settings):
     return normalized
 
 
-def load_notification_settings():
+def _settings_path():
+    """Return the actual file path to use.
+
+    Docker bind-mounting a non-existent host file creates a directory at the
+    target path. We can't remove a mount point from inside the container, so
+    we write a file *inside* the directory instead and read from there too.
+    """
     path = Path(SETTINGS_FILE)
+    return (path / "data.json") if path.is_dir() else path
+
+
+def load_notification_settings():
+    path = _settings_path()
     if not path.exists():
         return DEFAULT_SETTINGS.copy()
     try:
@@ -46,10 +56,7 @@ def load_notification_settings():
 
 def save_notification_settings(settings):
     normalized = normalize_settings(settings)
-    path = Path(SETTINGS_FILE)
-    if path.is_dir():
-        shutil.rmtree(path)
-    path.write_text(json.dumps(normalized, indent=2))
+    _settings_path().write_text(json.dumps(normalized, indent=2))
     return normalized
 
 
