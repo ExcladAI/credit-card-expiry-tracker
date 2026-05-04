@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -45,7 +46,10 @@ def load_notification_settings():
 
 def save_notification_settings(settings):
     normalized = normalize_settings(settings)
-    Path(SETTINGS_FILE).write_text(json.dumps(normalized, indent=2))
+    path = Path(SETTINGS_FILE)
+    if path.is_dir():
+        shutil.rmtree(path)
+    path.write_text(json.dumps(normalized, indent=2))
     return normalized
 
 
