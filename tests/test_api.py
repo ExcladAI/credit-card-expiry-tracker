@@ -118,3 +118,27 @@ def test_diagnostics_reports_missing_image(tmp_path, monkeypatch):
     body = response.json()
     assert body["counts"]["issues"] == 1
     assert body["issues"][0]["type"] == "missing_image"
+
+
+def test_bot_status_reports_unconfigured(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    client = TestClient(api.app)
+
+    response = client.get("/api/bot/status")
+
+    assert response.status_code == 200
+    assert response.json()["configured"] is False
+    assert response.json()["connected"] is False
+
+
+def test_bot_test_sends_message(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "123456")
+    monkeypatch.setattr(api, "telegram_request", lambda method, payload=None: {"message_id": 99})
+    client = TestClient(api.app)
+
+    response = client.post("/api/bot/test")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "messageId": 99}

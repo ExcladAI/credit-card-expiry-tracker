@@ -41,6 +41,8 @@ export const api = {
   },
   backup: () => request("/api/backups", { method: "POST" }),
   diagnostics: () => request("/api/diagnostics"),
+  botStatus: () => request("/api/bot/status"),
+  testBot: () => request("/api/bot/test", { method: "POST" }),
 };
 
 export function imageUrl(filename) {

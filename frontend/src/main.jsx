@@ -6,6 +6,7 @@ import {
   Bell,
   CalendarClock,
   Check,
+  CheckCircle2,
   ChevronRight,
   Download,
   Eye,
@@ -19,11 +20,13 @@ import {
   Plus,
   RefreshCcw,
   Search,
+  Send,
   Settings,
   Sun,
   Tag,
   Trash2,
   WalletCards,
+  XCircle,
 } from "lucide-react";
 import { api, imageUrl } from "./api";
 import {
@@ -65,6 +68,7 @@ function App() {
   const [loading, setLoading]     = useState(true);
   const [toast, setToast]         = useState("");
   const [diagData, setDiagData]   = useState(null);
+  const [botStatus, setBotStatus] = useState(null);
 
   async function refresh() {
     const [nextCards, nextTags, nextDiag] = await Promise.all([
@@ -76,6 +80,7 @@ function App() {
     setTags(nextTags);
     setDiagData(nextDiag);
     setLoading(false);
+    api.botStatus().then(setBotStatus).catch(() => setBotStatus(null));
   }
 
   useEffect(() => {
@@ -120,18 +125,19 @@ function App() {
   }, [cards]);
 
   function navigate(p) { setSelectedId(null); setPage(p); }
+  function openCard(id) { setSelectedId(id); setPage("details"); }
 
   return (
     <div className="app">
       {/* ── Sidebar ── */}
       <aside className="sidebar">
-        <div className="sidebar-brand">
+        <button className="sidebar-brand" onClick={() => navigate("overview")} title="Go to overview">
           <div className="mark">CC</div>
           <div>
             <div className="name">Card Tracker</div>
             <div className="sub">Private finance console</div>
           </div>
-        </div>
+        </button>
 
         <div className="nav-group">
           <div className="nav-label">Tracking</div>
@@ -204,12 +210,14 @@ function App() {
             theme={theme}
             density={density}
             diagData={diagData}
+            botStatus={botStatus}
             setTheme={setTheme}
             setDensity={setDensity}
             setHideLast4={setHideLast4}
             selected={selected}
             setPage={navigate}
-            setSelectedId={setSelectedId}
+            setSelectedId={openCard}
+            closeDetails={() => { setSelectedId(null); setPage("cards"); }}
             setEditing={setEditing}
             mutate={mutate}
             refresh={refresh}
@@ -273,7 +281,7 @@ function NavButton({ item, page, setPage, count }) {
 
 /* ── Router ── */
 function Router(props) {
-  if (props.selected)             return <Details {...props} />;
+  if (props.page === "details" && props.selected) return <Details {...props} />;
   if (props.page === "cards")     return <CardsPage {...props} />;
   if (props.page === "bonuses")   return <BonusesPage {...props} />;
   if (props.page === "fees")      return <FeesPage {...props} />;
@@ -387,8 +395,10 @@ function CardsPage({ cards, tags, query, showCancelled, hideLast4, setSelectedId
   const [bank, setBank] = useState("");
   const [tag, setTag]   = useState("");
   const [sort, setSort] = useState("manual");
+  const [status, setStatus] = useState("active");
   const banks   = [...new Set(cards.map((c) => c.bank).filter(Boolean))].sort();
-  const visible = filterCards(cards, { query, showCancelled, bank, tag, sort });
+  const visible = filterCards(cards, { query, showCancelled, bank, tag, sort, status });
+  const hasFilters = bank || tag || status !== "active" || query;
 
   return (
     <div className="content">
@@ -397,26 +407,40 @@ function CardsPage({ cards, tags, query, showCancelled, hideLast4, setSelectedId
       </PageHeader>
 
       <div className="filterbar">
+        <span className="filterbar-label">Status</span>
+        <div className="segmented">
+          {["active", "cancelled", "all"].map((item) => (
+            <button key={item} className={status === item ? "active" : ""} onClick={() => setStatus(item)}>
+              {item[0].toUpperCase() + item.slice(1)}
+            </button>
+          ))}
+        </div>
+        <div className="filterbar-sep" />
         <span className="filterbar-label">Bank</span>
-        <select value={bank} onChange={(e) => setBank(e.target.value)}>
+        <select className="select" value={bank} onChange={(e) => setBank(e.target.value)}>
           <option value="">All banks</option>
           {banks.map((b) => <option key={b} value={b}>{b}</option>)}
         </select>
-        <div className="filterbar-sep" />
         <span className="filterbar-label">Tag</span>
-        <select value={tag} onChange={(e) => setTag(e.target.value)}>
+        <select className="select" value={tag} onChange={(e) => setTag(e.target.value)}>
           <option value="">All tags</option>
           {tags.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
+        <div className="filterbar-spacer" />
         <div className="filterbar-sep" />
         <span className="filterbar-label">Sort</span>
-        <select value={sort} onChange={(e) => setSort(e.target.value)}>
+        <select className="select" value={sort} onChange={(e) => setSort(e.target.value)}>
           <option value="manual">Manual</option>
           <option value="due">Fee due date</option>
           <option value="fee-desc">Fee ↓</option>
           <option value="fee-asc">Fee ↑</option>
           <option value="bank">Bank</option>
         </select>
+        {hasFilters && (
+          <button className="btn small" onClick={() => { setBank(""); setTag(""); setStatus("active"); }}>
+            Clear
+          </button>
+        )}
       </div>
 
       <Panel flush>
@@ -475,8 +499,8 @@ function FeesPage({ cards, hideLast4, setSelectedId, mutate }) {
           <CardRow key={card.id} card={card} hideLast4={hideLast4} compact onOpen={() => setSelectedId(card.id)}>
             <div className="money">{fmtMoney(card.annualFee)}</div>
             <span className={`pill ${days <= 30 ? "rose" : days <= 60 ? "amber" : "teal"}`}>{days}d</span>
-            <button className="btn small" onClick={(e) => { e.stopPropagation(); mutate(() => api.feeAction(card.id, "Waived"), "Marked waived"); }}>Waived</button>
-            <button className="btn small" onClick={(e) => { e.stopPropagation(); mutate(() => api.feeAction(card.id, "Paid"),   "Marked paid");   }}>Paid</button>
+            <button className="btn small fee-action" onClick={(e) => { e.stopPropagation(); mutate(() => api.feeAction(card.id, "Waived"), "Marked waived"); }}>Waived</button>
+            <button className="btn small fee-action" onClick={(e) => { e.stopPropagation(); mutate(() => api.feeAction(card.id, "Paid"),   "Marked paid");   }}>Paid</button>
           </CardRow>
         ))}
         {byDue.length === 0 && <Empty>No active cards with fees.</Empty>}
@@ -489,6 +513,7 @@ function FeesPage({ cards, hideLast4, setSelectedId, mutate }) {
 function TagsPage({ cards, tags, refresh, mutate }) {
   const [newTag, setNewTag] = useState("");
   const counts = Object.fromEntries(tags.map((t) => [t, cards.filter((c) => c.tags.includes(t)).length]));
+  const cardsByTag = Object.fromEntries(tags.map((t) => [t, cards.filter((c) => c.tags.includes(t))]));
 
   function addTag() {
     if (!newTag.trim()) return;
@@ -498,29 +523,58 @@ function TagsPage({ cards, tags, refresh, mutate }) {
 
   return (
     <div className="content">
-      <PageHeader title="Tags" sub="Manage card labels" />
-      <Panel title="Existing tags">
-        <div className="tag-grid">
-          {tags.map((t) => (
-            <span className="tag-chip" key={t}>
-              {t}<b>{counts[t]}</b>
-              <button onClick={() => mutate(() => api.deleteTag(t).then(refresh), "Tag deleted")}><Trash2 size={12} /></button>
-            </span>
-          ))}
-          {tags.length === 0 && <span style={{ color: "var(--muted)", fontSize: 13 }}>No tags yet.</span>}
-        </div>
-        <div className="inline-form">
-          <input
-            value={newTag}
-            onChange={(e) => setNewTag(e.target.value)}
-            placeholder="New tag name"
-            onKeyDown={(e) => e.key === "Enter" && addTag()}
-          />
-          <button className="btn primary" onClick={addTag}>Add tag</button>
+      <PageHeader title="Tags" sub="Organize cards by purpose, perks, or strategy" />
+      <section className="grid two tags-top">
+        <Panel title={<>All tags <span className="panel-count">{tags.length}</span></>}>
+          <div className="tag-grid rich">
+            {tags.map((t) => (
+              <span className={`tag-chip ${tagTone(t)}`} key={t}>
+                {t}<b>{counts[t]}</b>
+                <button title={`Delete ${t}`} onClick={() => mutate(() => api.deleteTag(t).then(refresh), "Tag deleted")}><Trash2 size={12} /></button>
+              </span>
+            ))}
+            {tags.length === 0 && <span className="muted-note">No tags yet.</span>}
+          </div>
+        </Panel>
+        <Panel title="Add tag">
+          <div className="inline-form compact">
+            <input
+              value={newTag}
+              onChange={(e) => setNewTag(e.target.value)}
+              placeholder="e.g. Groceries"
+              onKeyDown={(e) => e.key === "Enter" && addTag()}
+            />
+            <button className="btn primary" onClick={addTag}><Plus size={14} /> Add</button>
+          </div>
+          <p className="helper-copy">Tags appear as filters on the Cards list and as labels on each card. Removing a tag also strips it from all cards using it.</p>
+        </Panel>
+      </section>
+
+      <Panel title="Cards per tag">
+        <div className="tag-card-list">
+          {tags.map((t) => {
+            const matching = cardsByTag[t] || [];
+            return (
+              <div className="tag-card-row" key={t}>
+                <span className={`tag-chip ${tagTone(t)}`}>{t}</span>
+                <span className="tag-count">{matching.length} card{matching.length === 1 ? "" : "s"}</span>
+                <div className="tag-card-names">
+                  {matching.slice(0, 6).map((card) => <span key={card.id}>{card.name}</span>)}
+                  {matching.length > 6 && <span>+{matching.length - 6}</span>}
+                  {matching.length === 0 && <em>No cards</em>}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </Panel>
     </div>
   );
+}
+
+function tagTone(tag) {
+  const tones = ["teal", "emerald", "amber", "rose", "muted"];
+  return tones[Math.abs([...tag].reduce((sum, char) => sum + char.charCodeAt(0), 0)) % tones.length];
 }
 
 /* ── Sort page ── */
@@ -582,7 +636,8 @@ function SortPage({ cards, hideLast4, setSelectedId, mutate }) {
 }
 
 /* ── Notifications page ── */
-function NotificationsPage({ cards, hideLast4, setSelectedId }) {
+function NotificationsPage({ cards, hideLast4, setSelectedId, botStatus, mutate }) {
+  const [feedFilter, setFeedFilter] = useState("all");
   const active = cards.filter((c) => c.status === "active");
   const events = [
     ...active
@@ -598,38 +653,161 @@ function NotificationsPage({ cards, hideLast4, setSelectedId }) {
         detail: `${fmtMoney(bonusProgress(c).remaining)} remaining`,
       })),
   ].sort((a, b) => a.days - b.days);
+  const activity = buildActivityFeed(cards);
+  const filteredActivity = feedFilter === "all" ? activity : activity.filter((item) => item.kind === feedFilter);
+  const connected = !!botStatus?.connected;
 
   return (
     <div className="content">
-      <PageHeader title="Notifications" sub="Telegram reminder surface and upcoming triggers" />
+      <PageHeader title="Notifications" sub={`${activity.filter((item) => !item.read).length} unread · delivered via Telegram bot`}>
+        <button className="btn" onClick={() => mutate(() => api.testBot(), "Telegram test message sent")}>
+          <Send size={14} /> Test connection
+        </button>
+      </PageHeader>
       <section className="grid two">
-        <Panel title="Telegram bot" sub="Uses the same local data as this dashboard">
-          <div className="bot-card">
-            <div className="bot-icon"><Bell size={16} /></div>
-            <div>
-              <strong>Reminder bot configured by environment</strong>
-              <p>Keep <code>TELEGRAM_BOT_TOKEN</code> and <code>TELEGRAM_CHAT_ID</code> in <code>.env</code>; the dashboard never exposes them.</p>
+        <Panel
+          title="Activity feed"
+          action={
+            <div className="feed-filters">
+              {["all", "fee", "bonus", "reapply"].map((item) => (
+                <button key={item} className={feedFilter === item ? "active" : ""} onClick={() => setFeedFilter(item)}>
+                  {item === "all" ? "All" : item[0].toUpperCase() + item.slice(1)}
+                </button>
+              ))}
             </div>
-          </div>
-          <div className="command-list">
-            {["/cards", "/info", "/fees", "/bonus", "/track", "/stats", "/backup", "/export"].map((cmd) => (
-              <code key={cmd}>{cmd}</code>
+          }
+        >
+          <div className="activity-list">
+            {filteredActivity.map((item) => (
+              <div className={`activity-row ${item.read ? "" : "unread"}`} key={item.id}>
+                <CardArt card={item.card} />
+                <div>
+                  <div className="activity-meta">
+                    <span className={`pill ${item.tone}`}>{item.label}</span>
+                    {!item.read && <span className="unread-dot" />}
+                    <span className="mono">{item.when}</span>
+                  </div>
+                  <div className="activity-message">{item.message}</div>
+                </div>
+                {item.read ? <Eye size={14} /> : <Check size={14} />}
+              </div>
             ))}
           </div>
         </Panel>
+
+        <div className="notification-side">
+          <Panel
+            title={<><MessageCircle size={14} /> Telegram bot</>}
+            action={<span className={`pill ${connected ? "emerald" : "muted"}`}>{connected ? <CheckCircle2 size={12} /> : <XCircle size={12} />}{connected ? "Connected" : "Disconnected"}</span>}
+          >
+            <div className="bot-details">
+              <div><span>Username</span><strong className="mono">{botStatus?.username || "Unknown"}</strong></div>
+              <div><span>Chat ID</span><strong className="mono">{botStatus?.chatId || "Not configured"}</strong></div>
+              <div><span>RUN_BOT</span><strong className="mono">{botStatus?.runBot || "auto"}</strong></div>
+              <div><span>Required</span><strong className="mono">{botStatus?.botRequired || "false"}</strong></div>
+            </div>
+            {botStatus?.error && <div className="bot-error">{botStatus.error}</div>}
+            <button className="btn primary full" onClick={() => mutate(() => api.testBot(), "Telegram test message sent")}>
+              <Send size={14} /> Send test message
+            </button>
+          </Panel>
+
+          <Panel title="Daily digest">
+            {[
+              ["Fees due ≤30 days", true],
+              ["Bonuses ≤30 days", true],
+              ["Re-apply eligible", true],
+              ["Card expiry ≤60 days", false],
+              ["Bonus progress weekly", false],
+            ].map(([label, on]) => (
+              <div className="digest-row" key={label}>
+                <span>{label}</span>
+                <Toggle checked={on} onChange={() => {}} />
+              </div>
+            ))}
+          </Panel>
+
+          <Panel title="Bot commands">
+            <div className="command-list stacked">
+              {[
+                ["/fees", "list upcoming fees"],
+                ["/bonus", "bonuses in progress"],
+                ["/cards", "list active cards"],
+                ["/info", "card details"],
+                ["/backup", "create backup"],
+              ].map(([cmd, label]) => (
+                <div key={cmd}><code>{cmd}</code><span>{label}</span></div>
+              ))}
+            </div>
+          </Panel>
+        </div>
+
         <Panel title="Upcoming notification queue" sub={`${events.length} reminders from real card data`}>
-          {events.length
-            ? events.map((event) => (
-                <CardRow key={`${event.type}-${event.card.id}`} card={event.card} hideLast4={hideLast4} compact onOpen={() => setSelectedId(event.card.id)}>
-                  <span className={`pill ${event.tone}`}>{event.days}d</span>
-                  <div className="muted-note">{event.type} · {event.detail}</div>
-                </CardRow>
-              ))
-            : <Empty>No notifications due in the next 60 days.</Empty>}
+          <div className="queue-list">
+            {events.length
+              ? events.map((event) => (
+                  <button key={`${event.type}-${event.card.id}`} className="queue-row" onClick={() => setSelectedId(event.card.id)}>
+                    <CardArt card={event.card} />
+                    <div>
+                      <strong>{event.card.name}</strong>
+                      <span>{event.type} · {event.detail}</span>
+                    </div>
+                    <span className={`pill ${event.tone}`}>{event.days}d</span>
+                  </button>
+                ))
+              : <Empty>No notifications due in the next 60 days.</Empty>}
+          </div>
         </Panel>
       </section>
     </div>
   );
+}
+
+function buildActivityFeed(cards) {
+  const active = cards.filter((card) => card.status === "active");
+  const cancelled = cards.filter((card) => card.status === "cancelled");
+  return [
+    ...active
+      .map((card) => ({ card, days: daysUntilMonth(card.feeMonth) }))
+      .filter((item) => item.days <= 60)
+      .map(({ card, days }) => ({
+        id: `fee-${card.id}`,
+        card,
+        kind: "fee",
+        label: "Fee",
+        tone: days <= 30 ? "rose" : "amber",
+        when: `${days}d`,
+        read: days > 30,
+        message: `${card.name} annual fee ${fmtMoney(card.annualFee)} is due in ${card.feeMonth || "N/A"}.`,
+      })),
+    ...active
+      .filter(isBonusActive)
+      .map((card) => {
+        const progress = bonusProgress(card);
+        return {
+          id: `bonus-${card.id}`,
+          card,
+          kind: "bonus",
+          label: "Bonus",
+          tone: (progress.days ?? 999) <= 30 ? "rose" : "amber",
+          when: `${progress.days ?? "N/A"}d`,
+          read: (progress.days ?? 999) > 30,
+          message: `${card.name} has ${fmtMoney(progress.remaining)} remaining for its welcome offer.`,
+        };
+      }),
+    ...cancelled
+      .filter((card) => card.dates?.reapply && new Date(card.dates.reapply) <= new Date())
+      .map((card) => ({
+        id: `reapply-${card.id}`,
+        card,
+        kind: "reapply",
+        label: "Re-apply",
+        tone: "emerald",
+        when: "ready",
+        read: false,
+        message: `${card.name} is eligible to re-apply.`,
+      })),
+  ];
 }
 
 /* ── Settings page ── */
@@ -715,14 +893,14 @@ function DiagnosticsPanel({ data }) {
 }
 
 /* ── Card detail view ── */
-function Details({ selected, hideLast4, setSelectedId, setEditing, mutate }) {
+function Details({ selected, hideLast4, closeDetails, setEditing, mutate }) {
   const progress = bonusProgress(selected);
   const [tab, setTab] = useState("overview");
 
   return (
     <div className="content">
       <PageHeader title={`${selected.bank} ${selected.name}`} sub={selected.status === "cancelled" ? "Cancelled card" : "Active card"}>
-        <button className="btn" onClick={() => setSelectedId(null)}>← Back</button>
+        <button className="btn" onClick={closeDetails}>← Back</button>
         <button className="btn primary" onClick={() => setEditing(selected)}><Pencil size={14} /> Edit</button>
       </PageHeader>
 
@@ -946,9 +1124,10 @@ function CardEditor({ card, tags, onClose, onSave }) {
 }
 
 /* ── Shared filter logic ── */
-function filterCards(cards, { query, showCancelled, bank, tag, sort }) {
+function filterCards(cards, { query, showCancelled, bank, tag, sort, status = "all" }) {
   const q = query.trim().toLowerCase();
   let result = cards.filter((c) => showCancelled || c.status !== "cancelled");
+  if (status !== "all") result = result.filter((c) => c.status === status);
   if (bank) result = result.filter((c) => c.bank === bank);
   if (tag)  result = result.filter((c) => c.tags.includes(tag));
   if (q)    result = result.filter((c) => [c.bank, c.name, c.notes, c.tags.join(" ")].join(" ").toLowerCase().includes(q));

@@ -1,6 +1,8 @@
 import json
 import os
 import shutil
+import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -37,6 +39,38 @@ app.add_middleware(
 Path(IMAGE_DIR).mkdir(parents=True, exist_ok=True)
 Path(BACKUP_DIR).mkdir(parents=True, exist_ok=True)
 app.mount("/card_images", StaticFiles(directory=IMAGE_DIR), name="card_images")
+
+
+def telegram_config():
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    return token, chat_id
+
+
+def telegram_request(method, payload=None):
+    token, _ = telegram_config()
+    if not token:
+        raise HTTPException(status_code=400, detail="Telegram bot token is not configured")
+    url = f"https://api.telegram.org/bot{token}/{method}"
+    data = urllib.parse.urlencode(payload or {}).encode()
+    request = urllib.request.Request(url, data=data if payload is not None else None)
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            body = json.loads(response.read().decode())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Telegram request failed: {exc}") from exc
+    if not body.get("ok"):
+        raise HTTPException(status_code=502, detail=body.get("description", "Telegram request failed"))
+    return body.get("result")
+
+
+def masked_chat_id(chat_id):
+    if not chat_id:
+        return None
+    value = str(chat_id)
+    if len(value) <= 6:
+        return "configured"
+    return f"{value[:3]}...{value[-3:]}"
 
 
 def _json_safe(value):
@@ -206,6 +240,41 @@ def write_tags(tags):
 @app.get("/api/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/api/bot/status")
+def bot_status():
+    token, chat_id = telegram_config()
+    configured = bool(token and chat_id)
+    status = {
+        "configured": configured,
+        "connected": False,
+        "username": None,
+        "chatId": masked_chat_id(chat_id),
+        "runBot": os.getenv("RUN_BOT", "auto"),
+        "botRequired": os.getenv("RUN_BOT_REQUIRED", "false"),
+    }
+    if not configured:
+        return status
+    try:
+        me = telegram_request("getMe")
+        status.update({
+            "connected": True,
+            "username": f"@{me.get('username')}" if me.get("username") else me.get("first_name"),
+        })
+    except HTTPException as exc:
+        status["error"] = exc.detail
+    return status
+
+
+@app.post("/api/bot/test")
+def test_bot_connection():
+    _, chat_id = telegram_config()
+    if not chat_id:
+        raise HTTPException(status_code=400, detail="Telegram chat ID is not configured")
+    text = f"Credit Card Tracker test message sent at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}."
+    result = telegram_request("sendMessage", {"chat_id": chat_id, "text": text})
+    return {"ok": True, "messageId": result.get("message_id")}
 
 
 @app.get("/api/cards")
