@@ -860,7 +860,12 @@ function NotificationsPage({ cards, hideLast4, setSelectedId, botStatus, notific
             </button>
           </Panel>
 
-          <Panel title="Daily digest">
+          <Panel title={
+            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              Daily digest
+              <Tooltip text="Sends a Telegram message once per day at the time you set. Each toggle controls whether that alert type is included. Requires the Telegram bot to be connected and running." />
+            </span>
+          }>
             <div className="setting-row compact">
               <span>Timezone</span>
               <select
@@ -1201,12 +1206,10 @@ function CardEditor({ card, tags, onClose, onSave }) {
           </FormSection>
 
           <FormSection number="03" title="Tags and notes">
-            <label className="field span">
+            <div className="field span">
               <span>Tags</span>
-              <select multiple value={draft.tags || []} onChange={(e) => set("tags", [...e.target.selectedOptions].map((o) => o.value))}>
-                {tags.map((t) => <option key={t}>{t}</option>)}
-              </select>
-            </label>
+              <TagPicker selected={draft.tags || []} all={tags} onChange={(v) => set("tags", v)} />
+            </div>
             <label className="field span">
               <span>Notes</span>
               <textarea value={draft.notes || ""} onChange={(e) => set("notes", e.target.value)} />
@@ -1421,6 +1424,41 @@ function BonusRow({ card, onOpen, children }) {
       </div>
       {children}
     </div>
+  );
+}
+
+/* ── Tag chip picker ── */
+function TagPicker({ selected = [], all = [], onChange }) {
+  function toggle(tag) {
+    onChange(selected.includes(tag) ? selected.filter((t) => t !== tag) : [...selected, tag]);
+  }
+  if (!all.length) {
+    return <p className="tag-picker-empty">No tags yet — add some on the Tags page.</p>;
+  }
+  return (
+    <div className="tag-picker">
+      {all.map((tag) => (
+        <button
+          key={tag}
+          type="button"
+          className={`tag-chip-toggle ${selected.includes(tag) ? "active" : ""}`}
+          onClick={() => toggle(tag)}
+        >
+          {selected.includes(tag) && <Check size={11} />}
+          {tag}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/* ── Tooltip ── */
+function Tooltip({ text }) {
+  return (
+    <span className="tooltip-wrap">
+      <span className="tooltip-trigger">?</span>
+      <span className="tooltip-body">{text}</span>
+    </span>
   );
 }
 
